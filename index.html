@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Office Time Logger</title>
+<meta name="theme-color" content="#0B1F14">
+<meta name="description" content="Log office Enter/Exit times stamped with verified network time.">
+
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Time Logger">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --paper:#F5F2E8;
+    --paper-dark:#EDE7D6;
+    --ink:#1A1A1A;
+    --ink-soft:#5A5747;
+    --ink-deep:#0B1F14;
+    --enter:#2D7D5A;
+    --enter-deep:#1F5A40;
+    --exit:#C0432E;
+    --exit-deep:#963523;
+    --holiday:#C9A227;
+    --holiday-bg:#FBF1D2;
+    --line:#D8D2BC;
+    --shadow: 0 1px 2px rgba(11,31,20,0.06), 0 4px 14px rgba(11,31,20,0.07);
+  }
+
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+
+  .mono{font-family:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,monospace;}
+
+  /* ---------- Header ---------- */
+  header{
+    background:var(--ink-deep);
+    color:var(--paper);
+    padding:calc(env(safe-area-inset-top) + 18px) 20px 18px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+  }
+  header .brand{
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  header .brand .mark{
+    width:30px;height:30px;border-radius:50%;
+    border:2px solid var(--paper);
+    display:flex;align-items:center;justify-content:center;
+    font-size:14px;
+  }
+  header h1{
+    font-size:16px;
+    font-weight:600;
+    letter-spacing:0.01em;
+    margin:0;
+  }
+  header .subtitle{
+    font-size:11px;
+    opacity:0.65;
+    margin-top:1px;
+    font-family:'JetBrains Mono',monospace;
+  }
+  .icon-btn{
+    background:transparent;
+    border:1px solid rgba(245,242,232,0.3);
+    color:var(--paper);
+    width:38px;height:38px;
+    border-radius:10px;
+    display:flex;align-items:center;justify-content:center;
+    cursor:pointer;
+  }
+
+  main{
+    max-width:480px;
+    margin:0 auto;
+    padding:20px 16px 100px;
+  }
+
+  /* ---------- Punch card (the "card" being stamped) ---------- */
+  .card{
+    background:#fff;
+    border-radius:18px;
+    box-shadow:var(--shadow);
+    overflow:hidden;
+    position:relative;
+  }
+  .punch-card{
+    padding:24px 22px 22px;
+  }
+  .punch-card .perforation{
+    position:absolute;
+    left:0;right:0;top:0;
+    height:10px;
+    background-image: radial-gradient(circle, var(--paper) 4px, transparent 4.5px);
+    background-size: 18px 10px;
+    background-position: 6px -3px;
+  }
+  .date-row{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    margin-bottom:14px;
+  }
+  .date-row .date{
+    font-size:13px;
+    color:var(--ink-soft);
+  }
+  .holiday-tag{
+    display:none;
+    align-items:center;
+    gap:5px;
+    background:var(--holiday-bg);
+    color:#8a6d12;
+    font-size:11px;
+    font-weight:700;
+    letter-spacing:0.04em;
+    padding:4px 10px;
+    border-radius:20px;
+  }
+  .holiday-tag.show{display:inline-flex;}
+
+  .stamp-row{
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr;
+    gap:10px;
+    margin-bottom:20px;
+  }
+  .stamp-cell{
+    text-align:center;
+    padding:14px 6px;
+    border-radius:12px;
+    background:var(--paper);
+    border:1px dashed var(--line);
+  }
+  .stamp-cell .label{
+    font-size:10px;
+    font-weight:700;
+    letter-spacing:0.08em;
+    color:var(--ink-soft);
+    margin-bottom:6px;
+  }
+  .stamp-cell .value{
+    font-size:18px;
+    font-weight:600;
+    font-family:'JetBrains Mono',monospace;
+  }
+  .stamp-cell.enter .value{color:var(--enter-deep);}
+  .stamp-cell.exit .value{color:var(--exit-deep);}
+  .stamp-cell.total .value{color:var(--ink-deep);}
+
+  .stamp-cell.just-stamped{
+    animation: stampPop 0.45s cubic-bezier(.2,1.4,.4,1);
+  }
+  @keyframes stampPop{
+    0%{transform:scale(1.18) rotate(-2deg); opacity:0.4;}
+    60%{transform:scale(0.97) rotate(1deg);}
+    100%{transform:scale(1) rotate(0deg); opacity:1;}
+  }
+
+  .btn-row{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:12px;
+  }
+  .punch-btn{
+    border:none;
+    border-radius:14px;
+    padding:18px 0;
+    font-size:15px;
+    font-weight:700;
+    letter-spacing:0.03em;
+    color:#fff;
+    cursor:pointer;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:4px;
+    transition:transform 0.12s ease, opacity 0.15s ease;
+  }
+  .punch-btn:active{transform:scale(0.96);}
+  .punch-btn:disabled{opacity:0.38; cursor:not-allowed; transform:none;}
+  .punch-btn.enter{background:var(--enter);}
+  .punch-btn.exit{background:var(--exit);}
+  .punch-btn svg{width:20px;height:20px;}
+  .punch-btn .sub{
+    font-size:10px;
+    font-weight:500;
+    opacity:0.85;
+    letter-spacing:0.02em;
+  }
+
+  .status-msg{
+    margin-top:12px;
+    font-size:12.5px;
+    text-align:center;
+    color:var(--ink-soft);
+    min-height:16px;
+  }
+  .status-msg.error{color:var(--exit-deep); font-weight:600;}
+
+  /* ---------- Section header ---------- */
+  .section-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin:28px 0 10px;
+    padding:0 2px;
+  }
+  .section-head h2{
+    font-size:13px;
+    font-weight:700;
+    letter-spacing:0.06em;
+    text-transform:uppercase;
+    color:var(--ink-soft);
+    margin:0;
+  }
+  .link-btn{
+    background:none;border:none;
+    color:var(--enter-deep);
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+    padding:4px;
+  }
+
+  /* ---------- Log list ---------- */
+  .log-item{
+    background:#fff;
+    border-radius:14px;
+    padding:14px 16px;
+    margin-bottom:8px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    box-shadow:var(--shadow);
+  }
+  .log-item .left .d{font-size:13.5px; font-weight:600;}
+  .log-item .left .t{font-size:12px; color:var(--ink-soft); margin-top:2px; font-family:'JetBrains Mono',monospace;}
+  .log-item .right{
+    font-size:13px;
+    font-weight:700;
+    font-family:'JetBrains Mono',monospace;
+    color:var(--enter-deep);
+    text-align:right;
+  }
+  .log-item.holiday .right{color:var(--holiday);}
+  .empty-state{
+    text-align:center;
+    color:var(--ink-soft);
+    font-size:13px;
+    padding:30px 10px;
+  }
+
+  /* ---------- Bottom nav ---------- */
+  nav.tabbar{
+    position:fixed;
+    left:0;right:0;bottom:0;
+    background:rgba(245,242,232,0.92);
+    backdrop-filter:blur(12px);
+    border-top:1px solid var(--line);
+    display:flex;
+    padding:8px 10px calc(8px + env(safe-area-inset-bottom));
+    max-width:480px;
+    margin:0 auto;
+  }
+  nav.tabbar .tab{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:3px;
+    background:none;border:none;
+    color:var(--ink-soft);
+    font-size:11px;
+    font-weight:600;
+    padding:6px 0;
+    cursor:pointer;
+  }
+  nav.tabbar .tab.active{color:var(--ink-deep);}
+  nav.tabbar svg{width:20px;height:20px;}
+
+  /* ---------- Month view ---------- */
+  .month-switch{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:16px;
+  }
+  .month-switch button{
+    background:#fff;
+    border:1px solid var(--line);
+    width:36px;height:36px;
+    border-radius:10px;
+    display:flex;align-items:center;justify-content:center;
+    cursor:pointer;
+  }
+  .month-switch h2{
+    font-size:16px;
+    font-weight:700;
+    margin:0;
+  }
+  .stat-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr;
+    gap:10px;
+    margin-bottom:24px;
+  }
+  .stat-card{
+    background:#fff;
+    border-radius:14px;
+    padding:16px 8px;
+    text-align:center;
+    box-shadow:var(--shadow);
+  }
+  .stat-card .v{font-size:19px; font-weight:700; color:var(--ink-deep); font-family:'JetBrains Mono',monospace;}
+  .stat-card .l{font-size:10px; color:var(--ink-soft); margin-top:4px; letter-spacing:0.02em;}
+
+  .view{display:none;}
+  .view.active{display:block;}
+
+  ::selection{background:var(--holiday-bg);}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="mark">⏱</div>
+    <div>
+      <h1>Office Time Logger</h1>
+      <div class="subtitle" id="headerClock">--:--:--</div>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- HOME VIEW -->
+  <section class="view active" id="view-home">
+    <div class="card punch-card">
+      <div class="perforation"></div>
+      <div class="date-row">
+        <span class="date" id="todayDate">—</span>
+        <span class="holiday-tag" id="holidayTag">● HOLIDAY</span>
+      </div>
+
+      <div class="stamp-row">
+        <div class="stamp-cell enter" id="cellEnter">
+          <div class="label">ENTER</div>
+          <div class="value mono" id="valEnter">--:--</div>
+        </div>
+        <div class="stamp-cell exit" id="cellExit">
+          <div class="label">EXIT</div>
+          <div class="value mono" id="valExit">--:--</div>
+        </div>
+        <div class="stamp-cell total" id="cellTotal">
+          <div class="label">TOTAL</div>
+          <div class="value mono" id="valTotal">--</div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="punch-btn enter" id="btnEnter">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M11 7L9.6 8.4l2.6 2.6L3 11v2l9.2 0-2.6 2.6L11 17l5-5-5-5z" fill="white"/><path d="M19 3h-7v2h7c.55 0 1 .45 1 1v12c0 .55-.45 1-1 1h-7v2h7c1.65 0 3-1.35 3-3V6c0-1.65-1.35-3-3-3z" fill="white"/></svg>
+          ENTER
+          <span class="sub">stamp arrival</span>
+        </button>
+        <button class="punch-btn exit" id="btnExit">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M17 7l1.4 1.4-2.6 2.6H21v2h-5.2l2.6 2.6L17 17l-5-5 5-5z" fill="white"/><path d="M5 3h7v2H5c-.55 0-1 .45-1 1v12c0 .55.45 1 1 1h7v2H5c-1.65 0-3-1.35-3-3V6c0-1.65 1.35-3 3-3z" fill="white"/></svg>
+          EXIT
+          <span class="sub">stamp departure</span>
+        </button>
+      </div>
+
+      <div class="status-msg" id="statusMsg"></div>
+    </div>
+
+    <div class="section-head">
+      <h2>Recent Logs</h2>
+      <button class="link-btn" id="goSummaryLink">Monthly Summary →</button>
+    </div>
+    <div id="recentList"></div>
+  </section>
+
+  <!-- SUMMARY VIEW -->
+  <section class="view" id="view-summary">
+    <div class="month-switch">
+      <button id="prevMonth" aria-label="Previous month">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="#1A1A1A"/></svg>
+      </button>
+      <h2 id="monthLabel">—</h2>
+      <button id="nextMonth" aria-label="Next month">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4L13.2 12z" fill="#1A1A1A"/></svg>
+      </button>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="v" id="statWorkDays">0</div><div class="l">WORKING DAYS</div></div>
+      <div class="stat-card"><div class="v" id="statHours">0h 0m</div><div class="l">TOTAL HOURS</div></div>
+      <div class="stat-card"><div class="v" id="statHolidays">0</div><div class="l">HOLIDAYS</div></div>
+    </div>
+
+    <div class="section-head" style="margin-top:4px;">
+      <h2>Day by Day</h2>
+    </div>
+    <div id="monthList"></div>
+  </section>
+
+</main>
+
+<nav class="tabbar">
+  <button class="tab active" id="tabHome">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M12 3l9 8h-2v9h-5v-6H10v6H5v-9H3z" fill="currentColor"/></svg>
+    Home
+  </button>
+  <button class="tab" id="tabSummary">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M19 3h-1V1h-2v2H8V1H6v2H5C3.9 3 3 3.9 3 5v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z" fill="currentColor"/></svg>
+    Summary
+  </button>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>
