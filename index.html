@@ -124,19 +124,33 @@
     font-size:13px;
     color:var(--ink-soft);
   }
-  .holiday-tag{
+  .holiday-tag{display:none;} /* legacy, unused — kept only to avoid breaking old cached HTML */
+
+  /* Generic status tag — color varies by day type */
+  .status-tag{
     display:none;
     align-items:center;
     gap:5px;
-    background:var(--holiday-bg);
-    color:#8a6d12;
     font-size:11px;
     font-weight:700;
     letter-spacing:0.04em;
     padding:4px 10px;
     border-radius:20px;
   }
-  .holiday-tag.show{display:inline-flex;}
+  .status-tag.show{display:inline-flex;}
+  .status-tag.weekend{background:var(--holiday-bg); color:#8a6d12;}
+  .status-tag.national{background:#E4E9F7; color:#2F4B9E;}
+  .status-tag.festival{background:#F3E3F5; color:#7A3686;}
+  .status-tag.leave{background:#E3EEE8; color:#1F5A40;}
+
+  .mark-today-row{
+    margin-top:8px;
+    margin-bottom:6px;
+  }
+  .link-btn.small{
+    font-size:12px;
+    padding:2px;
+  }
 
   .stamp-row{
     display:grid;
@@ -252,7 +266,10 @@
     align-items:center;
     justify-content:space-between;
     box-shadow:var(--shadow);
+    cursor:pointer;
+    transition:transform 0.1s ease;
   }
+  .log-item:active{transform:scale(0.98);}
   .log-item .left .d{font-size:13.5px; font-weight:600;}
   .log-item .left .t{font-size:12px; color:var(--ink-soft); margin-top:2px; font-family:'JetBrains Mono',monospace;}
   .log-item .right{
@@ -263,6 +280,9 @@
     text-align:right;
   }
   .log-item.holiday .right{color:var(--holiday);}
+  .log-item.leave .right{color:var(--enter-deep);}
+  .log-item.national .right{color:#2F4B9E;}
+  .log-item.festival .right{color:#7A3686;}
   .empty-state{
     text-align:center;
     color:var(--ink-soft);
@@ -324,6 +344,13 @@
     gap:10px;
     margin-bottom:24px;
   }
+  .stat-grid.four{
+    grid-template-columns:1fr 1fr 1fr 1fr;
+    gap:8px;
+  }
+  .stat-grid.four .stat-card{padding:14px 4px;}
+  .stat-grid.four .v{font-size:16px;}
+  .stat-grid.four .l{font-size:9px;}
   .stat-card{
     background:#fff;
     border-radius:14px;
@@ -336,6 +363,85 @@
 
   .view{display:none;}
   .view.active{display:block;}
+
+  /* ---------- Day status picker (bottom sheet) ---------- */
+  .sheet-backdrop{
+    position:fixed;
+    inset:0;
+    background:rgba(11,31,20,0.45);
+    display:none;
+    align-items:flex-end;
+    justify-content:center;
+    z-index:50;
+  }
+  .sheet-backdrop.show{display:flex;}
+  .sheet{
+    background:var(--paper);
+    width:100%;
+    max-width:480px;
+    border-radius:20px 20px 0 0;
+    padding:10px 18px calc(18px + env(safe-area-inset-bottom));
+    transform:translateY(100%);
+    transition:transform 0.25s ease;
+  }
+  .sheet-backdrop.show .sheet{transform:translateY(0);}
+  .sheet-handle{
+    width:36px;height:4px;
+    background:var(--line);
+    border-radius:4px;
+    margin:6px auto 14px;
+  }
+  .sheet-title{
+    font-size:14px;
+    font-weight:700;
+    color:var(--ink-soft);
+    margin-bottom:12px;
+    text-align:center;
+  }
+  .sheet-options{
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    margin-bottom:14px;
+  }
+  .sheet-option{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    background:#fff;
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:14px 16px;
+    font-size:14px;
+    font-weight:600;
+    color:var(--ink);
+    cursor:pointer;
+    text-align:left;
+  }
+  .sheet-option.selected{
+    border-color:var(--ink-deep);
+    background:var(--paper-dark);
+  }
+  .sheet-option .dot{
+    width:10px;height:10px;
+    border-radius:50%;
+    flex-shrink:0;
+  }
+  .dot.working{background:var(--enter);}
+  .dot.leave{background:#1F5A40;}
+  .dot.festival{background:#7A3686;}
+  .dot.national{background:#2F4B9E;}
+  .dot.weekend{background:var(--holiday);}
+  .sheet-cancel{
+    width:100%;
+    background:none;
+    border:none;
+    padding:12px;
+    font-size:14px;
+    font-weight:600;
+    color:var(--ink-soft);
+    cursor:pointer;
+  }
 
   ::selection{background:var(--holiday-bg);}
 </style>
@@ -360,7 +466,10 @@
       <div class="perforation"></div>
       <div class="date-row">
         <span class="date" id="todayDate">—</span>
-        <span class="holiday-tag" id="holidayTag">● HOLIDAY</span>
+        <span class="status-tag" id="statusTag"></span>
+      </div>
+      <div class="mark-today-row">
+        <button class="link-btn small" id="markTodayBtn">Mark today as Leave / Holiday →</button>
       </div>
 
       <div class="stamp-row">
@@ -413,10 +522,11 @@
       </button>
     </div>
 
-    <div class="stat-grid">
+    <div class="stat-grid four">
       <div class="stat-card"><div class="v" id="statWorkDays">0</div><div class="l">WORKING DAYS</div></div>
-      <div class="stat-card"><div class="v" id="statHours">0h 0m</div><div class="l">TOTAL HOURS</div></div>
+      <div class="stat-card"><div class="v" id="statLeave">0</div><div class="l">LEAVE</div></div>
       <div class="stat-card"><div class="v" id="statHolidays">0</div><div class="l">HOLIDAYS</div></div>
+      <div class="stat-card"><div class="v" id="statHours">0h 0m</div><div class="l">TOTAL HOURS</div></div>
     </div>
 
     <div class="section-head" style="margin-top:4px;">
@@ -426,6 +536,16 @@
   </section>
 
 </main>
+
+<!-- Day status picker (bottom sheet) -->
+<div class="sheet-backdrop" id="sheetBackdrop">
+  <div class="sheet" id="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title" id="sheetTitle">Mark this day</div>
+    <div class="sheet-options" id="sheetOptions"></div>
+    <button class="sheet-cancel" id="sheetCancel">Cancel</button>
+  </div>
+</div>
 
 <nav class="tabbar">
   <button class="tab active" id="tabHome">

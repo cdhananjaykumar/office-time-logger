@@ -11,12 +11,23 @@ offline — with **zero app-store install and no build tools needed**.
 - If you're offline when you tap a button, it shows a clear error and does
   **not** record a punch — a log entry is only ever created from a verified
   network time
-- **Saturdays & Sundays auto-marked Holiday** — punch buttons disable
-  themselves on those days
+- **Day types**, each shown with its own colored badge:
+  - **Weekend** — Saturdays & Sundays, detected automatically
+  - **National Holiday** — Republic Day, Independence Day, Gandhi Jayanti,
+    pre-filled automatically every year
+  - **Festival / Office Holiday** — add these yourself for any date (Diwali,
+    Holi, office-declared holidays, etc.)
+  - **Leave** — mark any day you're taking off
+  - On any non-working day, the Enter/Exit buttons disable themselves
+- **Mark a day** two ways:
+  - Tap **"Mark today as Leave / Holiday"** on the Home screen for today
+  - Or tap **any day** in Monthly Summary to set/change its status —
+    past or future
 - Today's card: Enter time, Exit time, hours worked, with a little
   "ink-stamp" animation when you punch
-- Recent logs list + a full **Monthly Summary** (working days, total
-  hours, holiday count, day-by-day breakdown, month navigation)
+- Recent logs list + a full **Monthly Summary** with separate counts for
+  **Working Days**, **Leave**, and **Holidays**, plus total hours and a
+  full day-by-day breakdown with month navigation
 - All data is stored only in your phone's browser (`localStorage`) — no
   account, no server, nothing uploaded anywhere
 
@@ -67,9 +78,17 @@ sane before trusting it. If both are unreachable, it tries one more
 fallback before giving up and showing an error — it will never silently
 fall back to your phone's own clock for a punch.
 
+## Updating an existing GitHub Pages site
+If you've already deployed an earlier version (e.g. at
+`https://yourname.github.io/your-repo/`), just upload these updated files
+the same way — go to the repo on GitHub, click **Add file → Upload files**,
+drag in `index.html` and `app.js` (the two that changed), and commit. Your
+live site updates within about a minute, automatically — no need to touch
+the Pages settings again.
+
 ## Want changes?
 A few easy follow-ups if useful:
 - Export the monthly log as a CSV/PDF you can send to HR
 - A PIN/passcode lock on the app
-- Editable holiday list (e.g. add public holidays, not just Sat/Sun)
+- More national holidays, or holidays specific to your state
 - Reminder notification if you forget to punch Exit

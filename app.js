@@ -68,6 +68,63 @@ function daysInMonth(year, monthIndex) {
   return new Date(year, monthIndex + 1, 0).getDate();
 }
 
+/* ===================== Day type model =====================
+   Every day has exactly one "dayType":
+   - WORKING:  a normal working day (default for any weekday)
+   - WEEKEND:  Saturday/Sunday, auto-detected, can't be manually removed
+   - NATIONAL: fixed-date national holiday (pre-filled list below), repeats every year
+   - FESTIVAL: a holiday the user adds themselves (festival, office-declared, etc.)
+   - LEAVE:    the user is on leave that day
+   These replace the old simple isHoliday boolean. Old saved entries (which
+   only had isHoliday: true/false) are migrated automatically on load. */
+
+const DAY_TYPE = {
+  WORKING: 'WORKING',
+  WEEKEND: 'WEEKEND',
+  NATIONAL: 'NATIONAL',
+  FESTIVAL: 'FESTIVAL',
+  LEAVE: 'LEAVE',
+};
+
+const DAY_TYPE_LABEL = {
+  WORKING: 'Working Day',
+  WEEKEND: 'Weekend',
+  NATIONAL: 'National Holiday',
+  FESTIVAL: 'Festival Holiday',
+  LEAVE: 'Leave',
+};
+
+// Fixed-date Indian national holidays — same date every year, pre-filled.
+// month is 0-indexed (0 = January) to match JS Date conventions.
+const NATIONAL_HOLIDAYS = [
+  { month: 0, day: 26, name: 'Republic Day' },
+  { month: 7, day: 15, name: 'Independence Day' },
+  { month: 9, day: 2, name: 'Gandhi Jayanti' },
+];
+
+function getNationalHolidayName(d) {
+  const month = d.getMonth();
+  const day = d.getDate();
+  const match = NATIONAL_HOLIDAYS.find(h => h.month === month && h.day === day);
+  return match ? match.name : null;
+}
+
+function isNonWorking(dayType) {
+  return dayType !== DAY_TYPE.WORKING;
+}
+
+function isHolidayType(dayType) {
+  return dayType === DAY_TYPE.WEEKEND || dayType === DAY_TYPE.NATIONAL || dayType === DAY_TYPE.FESTIVAL;
+}
+
+/** Determine the default day type for a date that has no saved override. */
+function defaultDayType(d) {
+  if (isWeekendHoliday(d)) return DAY_TYPE.WEEKEND;
+  const nationalName = getNationalHolidayName(d);
+  if (nationalName) return DAY_TYPE.NATIONAL;
+  return DAY_TYPE.WORKING;
+}
+
 /* ===================== Network time provider =====================
    Browsers cannot do raw NTP (UDP), so we use a layered HTTPS strategy:
    1) Try a couple of small JSON "world time" style endpoints.
@@ -159,23 +216,53 @@ async function fetchFromHeader() {
 /* ===================== Repository (business logic) ===================== */
 function getEntry(key) {
   const all = loadAllEntries();
-  return all[key] || null;
+  const raw = all[key] || null;
+  return raw ? migrateEntry(raw) : null;
+}
+
+/** Migrates old-format entries (boolean isHoliday) to the new dayType model.
+ * Old data is never lost — we just add a dayType field, inferred as best we can. */
+function migrateEntry(entry) {
+  if (entry.dayType) return entry; // already new format
+  const d = new Date(entry.dateMillis);
+  entry.dayType = entry.isHoliday ? defaultDayType(d) : DAY_TYPE.WORKING;
+  return entry;
 }
 
 function getOrBuildEntry(date) {
   const key = dateKey(date);
   const existing = getEntry(key);
   if (existing) return existing;
+
+  const dayType = defaultDayType(date);
   return {
     dateString: key,
     dateMillis: startOfDay(date).getTime(),
     dayOfWeek: dayCode(date),
-    isHoliday: isWeekendHoliday(date),
+    dayType: dayType,
+    isHoliday: isHolidayType(dayType), // kept for display convenience/back-compat
     enterTimeMillis: null,
     exitTimeMillis: null,
     enterTimeDisplay: null,
     exitTimeDisplay: null
   };
+}
+
+/** Sets/overrides the day type for a given date (e.g. mark as Leave, Festival,
+ * or reset back to Working/auto-detected). Clears punch data if the new type
+ * is non-working, since a holiday/leave day shouldn't carry stray punches. */
+function setDayType(date, dayType) {
+  const entry = getOrBuildEntry(date);
+  entry.dayType = dayType;
+  entry.isHoliday = isHolidayType(dayType);
+  if (isNonWorking(dayType)) {
+    entry.enterTimeMillis = null;
+    entry.exitTimeMillis = null;
+    entry.enterTimeDisplay = null;
+    entry.exitTimeDisplay = null;
+  }
+  saveEntry(entry);
+  return entry;
 }
 
 function saveEntry(entry) {
@@ -195,6 +282,9 @@ const PUNCH_ERROR = 'error';
 
 function punchEnter(networkDate) {
   const entry = getOrBuildEntry(networkDate);
+  if (isNonWorking(entry.dayType)) {
+    return { status: PUNCH_ERROR, message: `Today is marked as ${DAY_TYPE_LABEL[entry.dayType]}. No punch needed.` };
+  }
   if (entry.enterTimeMillis) {
     return { status: PUNCH_ERROR, message: `You've already punched Enter today at ${entry.enterTimeDisplay}.` };
   }
@@ -206,6 +296,9 @@ function punchEnter(networkDate) {
 
 function punchExit(networkDate) {
   const entry = getOrBuildEntry(networkDate);
+  if (isNonWorking(entry.dayType)) {
+    return { status: PUNCH_ERROR, message: `Today is marked as ${DAY_TYPE_LABEL[entry.dayType]}. No punch needed.` };
+  }
   if (!entry.enterTimeMillis) {
     return { status: PUNCH_ERROR, message: "You haven't punched Enter yet today." };
   }
@@ -224,6 +317,7 @@ function punchExit(networkDate) {
 function getRecentEntries(limit = 20) {
   const all = loadAllEntries();
   return Object.values(all)
+    .map(migrateEntry)
     .sort((a, b) => b.dateMillis - a.dateMillis)
     .slice(0, limit);
 }
@@ -237,13 +331,15 @@ function getMonthEntries(year, monthIndex) {
     const key = dateKey(d);
     const existing = all[key];
     if (existing) {
-      result.push(existing);
+      result.push(migrateEntry(existing));
     } else {
+      const dayType = defaultDayType(d);
       result.push({
         dateString: key,
         dateMillis: startOfDay(d).getTime(),
         dayOfWeek: dayCode(d),
-        isHoliday: isWeekendHoliday(d),
+        dayType: dayType,
+        isHoliday: isHolidayType(dayType),
         enterTimeMillis: null,
         exitTimeMillis: null,
         enterTimeDisplay: null,
@@ -258,7 +354,8 @@ function getMonthEntries(year, monthIndex) {
 const els = {
   headerClock: document.getElementById('headerClock'),
   todayDate: document.getElementById('todayDate'),
-  holidayTag: document.getElementById('holidayTag'),
+  statusTag: document.getElementById('statusTag'),
+  markTodayBtn: document.getElementById('markTodayBtn'),
   valEnter: document.getElementById('valEnter'),
   valExit: document.getElementById('valExit'),
   valTotal: document.getElementById('valTotal'),
@@ -278,9 +375,15 @@ const els = {
   nextMonth: document.getElementById('nextMonth'),
   monthLabel: document.getElementById('monthLabel'),
   statWorkDays: document.getElementById('statWorkDays'),
+  statLeave: document.getElementById('statLeave'),
   statHours: document.getElementById('statHours'),
   statHolidays: document.getElementById('statHolidays'),
   monthList: document.getElementById('monthList'),
+  sheetBackdrop: document.getElementById('sheetBackdrop'),
+  sheet: document.getElementById('sheet'),
+  sheetTitle: document.getElementById('sheetTitle'),
+  sheetOptions: document.getElementById('sheetOptions'),
+  sheetCancel: document.getElementById('sheetCancel'),
 };
 
 let summaryAnchor = new Date();
@@ -291,27 +394,68 @@ function tickHeaderClock() {
 setInterval(tickHeaderClock, 1000);
 tickHeaderClock();
 
+// Maps a dayType to the CSS class used for status tags / log item accents.
+const DAY_TYPE_CSS_CLASS = {
+  WEEKEND: 'weekend',
+  NATIONAL: 'national',
+  FESTIVAL: 'festival',
+  LEAVE: 'leave',
+};
+
 function renderToday() {
   const now = new Date();
   els.todayDate.textContent = displayDateFull(now);
 
   const entry = getOrBuildEntry(now);
-  const holiday = isWeekendHoliday(now);
+  const nonWorking = isNonWorking(entry.dayType);
 
-  els.holidayTag.classList.toggle('show', holiday);
+  if (nonWorking) {
+    const cls = DAY_TYPE_CSS_CLASS[entry.dayType] || '';
+    els.statusTag.className = 'status-tag show ' + cls;
+    els.statusTag.textContent = '● ' + DAY_TYPE_LABEL[entry.dayType].toUpperCase();
+  } else {
+    els.statusTag.className = 'status-tag';
+    els.statusTag.textContent = '';
+  }
 
   els.valEnter.textContent = entry.enterTimeDisplay || '--:--';
   els.valExit.textContent = entry.exitTimeDisplay || '--:--';
   const mins = workedMinutes(entry);
   els.valTotal.textContent = mins != null ? formatDuration(mins) : '--';
 
-  if (holiday) {
+  if (nonWorking) {
     els.btnEnter.disabled = true;
     els.btnExit.disabled = true;
   } else {
     els.btnEnter.disabled = !!entry.enterTimeMillis;
     els.btnExit.disabled = !entry.enterTimeMillis || !!entry.exitTimeMillis;
   }
+
+  // The "Mark today as..." link is hidden once a punch has been made today,
+  // since changing the day type would wipe that punch — keeping it visible
+  // until then avoids an accidental data-losing tap.
+  els.markTodayBtn.style.display = entry.enterTimeMillis ? 'none' : '';
+  els.markTodayBtn.textContent = nonWorking
+    ? `Marked as ${DAY_TYPE_LABEL[entry.dayType]} — tap to change`
+    : 'Mark today as Leave / Holiday →';
+}
+
+function describeEntry(entry) {
+  if (isNonWorking(entry.dayType)) {
+    return { detail: DAY_TYPE_LABEL[entry.dayType], right: '—', cssClass: DAY_TYPE_CSS_CLASS[entry.dayType] || 'holiday' };
+  }
+  if (entry.enterTimeDisplay && entry.exitTimeDisplay) {
+    const mins = workedMinutes(entry);
+    return {
+      detail: `${entry.enterTimeDisplay} → ${entry.exitTimeDisplay}`,
+      right: mins != null ? formatDuration(mins) : '--',
+      cssClass: ''
+    };
+  }
+  if (entry.enterTimeDisplay) {
+    return { detail: `Entered ${entry.enterTimeDisplay}`, right: 'In progress', cssClass: '' };
+  }
+  return { detail: 'No punches', right: '--', cssClass: '' };
 }
 
 function renderRecentList() {
@@ -325,24 +469,9 @@ function renderRecentList() {
 
   for (const entry of entries) {
     const div = document.createElement('div');
-    div.className = 'log-item' + (entry.isHoliday ? ' holiday' : '');
+    const { detail, right, cssClass } = describeEntry(entry);
+    div.className = 'log-item' + (cssClass ? ' ' + cssClass : '');
     const d = new Date(entry.dateMillis);
-
-    let detail, right;
-    if (entry.isHoliday) {
-      detail = 'Holiday';
-      right = '—';
-    } else if (entry.enterTimeDisplay && entry.exitTimeDisplay) {
-      detail = `${entry.enterTimeDisplay} → ${entry.exitTimeDisplay}`;
-      const mins = workedMinutes(entry);
-      right = mins != null ? formatDuration(mins) : '--';
-    } else if (entry.enterTimeDisplay) {
-      detail = `Entered ${entry.enterTimeDisplay}`;
-      right = 'In progress';
-    } else {
-      detail = 'No punches';
-      right = '--';
-    }
 
     div.innerHTML = `
       <div class="left">
@@ -351,6 +480,7 @@ function renderRecentList() {
       </div>
       <div class="right">${right}</div>
     `;
+    div.addEventListener('click', () => openDayStatusSheet(d));
     els.recentList.appendChild(div);
   }
 }
@@ -362,38 +492,25 @@ function renderSummary() {
 
   const entries = getMonthEntries(year, monthIndex);
 
-  const workDays = entries.filter(e => !e.isHoliday && e.enterTimeMillis).length;
-  const holidays = entries.filter(e => e.isHoliday).length;
+  const workDays = entries.filter(e => !isNonWorking(e.dayType) && e.enterTimeMillis).length;
+  const leaveDays = entries.filter(e => e.dayType === DAY_TYPE.LEAVE).length;
+  const holidays = entries.filter(e => isHolidayType(e.dayType)).length;
   const totalMins = entries.reduce((sum, e) => {
     const m = workedMinutes(e);
     return sum + (m || 0);
   }, 0);
 
   els.statWorkDays.textContent = workDays;
+  els.statLeave.textContent = leaveDays;
   els.statHolidays.textContent = holidays;
   els.statHours.textContent = formatDuration(totalMins);
 
   els.monthList.innerHTML = '';
   for (const entry of entries) {
     const div = document.createElement('div');
-    div.className = 'log-item' + (entry.isHoliday ? ' holiday' : '');
+    const { detail, right, cssClass } = describeEntry(entry);
+    div.className = 'log-item' + (cssClass ? ' ' + cssClass : '');
     const d = new Date(entry.dateMillis);
-
-    let detail, right;
-    if (entry.isHoliday) {
-      detail = 'Holiday';
-      right = '—';
-    } else if (entry.enterTimeDisplay && entry.exitTimeDisplay) {
-      detail = `${entry.enterTimeDisplay} → ${entry.exitTimeDisplay}`;
-      const mins = workedMinutes(entry);
-      right = mins != null ? formatDuration(mins) : '--';
-    } else if (entry.enterTimeDisplay) {
-      detail = `Entered ${entry.enterTimeDisplay}`;
-      right = 'In progress';
-    } else {
-      detail = 'No punches';
-      right = '--';
-    }
 
     div.innerHTML = `
       <div class="left">
@@ -402,6 +519,7 @@ function renderSummary() {
       </div>
       <div class="right">${right}</div>
     `;
+    div.addEventListener('click', () => openDayStatusSheet(d));
     els.monthList.appendChild(div);
   }
 }
@@ -424,8 +542,11 @@ async function handlePunch(isEnter) {
 
   const networkDate = result.date;
 
-  if (isWeekendHoliday(networkDate)) {
-    els.statusMsg.textContent = 'Today is a holiday (Sat/Sun). No punch needed.';
+  // Re-check against the freshly-fetched network date (not just the device
+  // clock) in case the day type depends on which calendar day it actually is.
+  const freshEntry = getOrBuildEntry(networkDate);
+  if (isNonWorking(freshEntry.dayType)) {
+    els.statusMsg.textContent = `Today is marked as ${DAY_TYPE_LABEL[freshEntry.dayType]}. No punch needed.`;
     renderToday();
     return;
   }
@@ -445,6 +566,76 @@ async function handlePunch(isEnter) {
     renderToday();
   }
 }
+
+/* ===================== Day status picker (bottom sheet) =====================
+   Shared by "Mark today" on Home and tap-any-day in Monthly Summary.
+   Weekends and national holidays are shown as info (can't be removed,
+   since they're calendar facts) but Working/Leave/Festival are switchable. */
+let sheetTargetDate = null;
+
+function openDayStatusSheet(date) {
+  sheetTargetDate = date;
+  const entry = getOrBuildEntry(date);
+  const isAutoLocked = entry.dayType === DAY_TYPE.WEEKEND || entry.dayType === DAY_TYPE.NATIONAL;
+
+  els.sheetTitle.textContent = displayDateFull(date);
+
+  // Warn if punches exist and would be cleared by switching to non-working.
+  const hasPunches = !!entry.enterTimeMillis;
+
+  els.sheetOptions.innerHTML = '';
+
+  if (isAutoLocked) {
+    // Weekend / National holiday dates are calendar facts — show as locked info,
+    // but still allow switching to Leave/Festival isn't meaningful here, so just inform.
+    const info = document.createElement('div');
+    info.className = 'sheet-option selected';
+    info.style.cursor = 'default';
+    const label = entry.dayType === DAY_TYPE.WEEKEND
+      ? 'Weekend (automatic)'
+      : `National Holiday — ${getNationalHolidayName(date) || ''}`;
+    info.innerHTML = `<span class="dot ${DAY_TYPE_CSS_CLASS[entry.dayType] || 'weekend'}"></span> ${label}`;
+    els.sheetOptions.appendChild(info);
+  } else {
+    const options = [
+      { type: DAY_TYPE.WORKING, label: 'Working Day', dot: 'working' },
+      { type: DAY_TYPE.LEAVE, label: 'Leave', dot: 'leave' },
+      { type: DAY_TYPE.FESTIVAL, label: 'Festival / Office Holiday', dot: 'festival' },
+    ];
+    for (const opt of options) {
+      const btn = document.createElement('button');
+      btn.className = 'sheet-option' + (entry.dayType === opt.type ? ' selected' : '');
+      btn.innerHTML = `<span class="dot ${opt.dot}"></span> ${opt.label}`;
+      btn.addEventListener('click', () => applyDayStatus(opt.type, hasPunches));
+      els.sheetOptions.appendChild(btn);
+    }
+  }
+
+  els.sheetBackdrop.classList.add('show');
+}
+
+function applyDayStatus(dayType, hadPunches) {
+  if (hadPunches && isNonWorking(dayType)) {
+    const ok = confirm('This will clear the Enter/Exit times already logged for this day. Continue?');
+    if (!ok) return;
+  }
+  setDayType(sheetTargetDate, dayType);
+  closeDayStatusSheet();
+  renderToday();
+  renderRecentList();
+  if (els.viewSummary.classList.contains('active')) renderSummary();
+}
+
+function closeDayStatusSheet() {
+  els.sheetBackdrop.classList.remove('show');
+  sheetTargetDate = null;
+}
+
+els.sheetBackdrop.addEventListener('click', (e) => {
+  if (e.target === els.sheetBackdrop) closeDayStatusSheet();
+});
+els.sheetCancel.addEventListener('click', closeDayStatusSheet);
+els.markTodayBtn.addEventListener('click', () => openDayStatusSheet(new Date()));
 
 /* ===================== Navigation ===================== */
 function showView(name) {
