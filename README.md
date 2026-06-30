@@ -13,16 +13,23 @@ offline — with **zero app-store install and no build tools needed**.
   network time
 - **Day types**, each shown with its own colored badge:
   - **Weekend** — Saturdays & Sundays, detected automatically
-  - **National Holiday** — Republic Day, Independence Day, Gandhi Jayanti,
-    pre-filled automatically every year
-  - **Festival / Office Holiday** — add these yourself for any date (Diwali,
-    Holi, office-declared holidays, etc.)
+  - **National Holiday** — pre-filled with the 2026 holiday list (Republic
+    Day, Holi, Id-ul-Fitr, Ram Navami, Mahavir Jayanti, Good Friday, Buddha
+    Purnima, Bakrid, Muharram, Independence Day, Id-e-Milad, Janmashtami,
+    Gandhi Jayanti, Dussehra, Diwali, Guru Nanak Jayanti, Christmas)
+  - **Festival / Office Holiday** — add these yourself for any date
   - **Leave** — mark any day you're taking off
   - On any non-working day, the Enter/Exit buttons disable themselves
 - **Mark a day** two ways:
   - Tap **"Mark today as Leave / Holiday"** on the Home screen for today
   - Or tap **any day** in Monthly Summary to set/change its status —
     past or future
+- **Remarks** — add a free-text note to any day (e.g. "WFH", "client visit",
+  "half day") from the same Mark-a-day sheet; shown inline in the logs list
+- **Download Monthly Summary as PDF** — a button on the Monthly Summary
+  screen opens a clean printable report (stats + full day-by-day table with
+  remarks) and triggers your browser's Print dialog — choose "Save as PDF"
+  there. No internet connection or external library needed for this.
 - Today's card: Enter time, Exit time, hours worked, with a little
   "ink-stamp" animation when you punch
 - Recent logs list + a full **Monthly Summary** with separate counts for
@@ -88,7 +95,9 @@ the Pages settings again.
 
 ## Want changes?
 A few easy follow-ups if useful:
-- Export the monthly log as a CSV/PDF you can send to HR
 - A PIN/passcode lock on the app
-- More national holidays, or holidays specific to your state
+- Holidays for a different year, or state-specific holidays — just edit the
+  `NATIONAL_HOLIDAYS` list in `app.js` (each entry is `{year, month, day, name}`,
+  month is 0-indexed)
 - Reminder notification if you forget to punch Exit
+- Export raw data as CSV (in addition to the PDF summary)

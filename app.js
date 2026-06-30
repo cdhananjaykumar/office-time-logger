@@ -94,18 +94,38 @@ const DAY_TYPE_LABEL = {
   LEAVE: 'Leave',
 };
 
-// Fixed-date Indian national holidays — same date every year, pre-filled.
+// National/festival holidays — given as exact (year, month, day) dates, since
+// several of these (Holi, Eid, Diwali, etc.) follow the lunar calendar and
+// shift every year, so a fixed month/day repeat-every-year rule would be wrong.
 // month is 0-indexed (0 = January) to match JS Date conventions.
+// Entries marked with a trailing "*" in the source schedule (festivals subject
+// to moon-sighting) are listed as normal entries here — if the actual observed
+// date differs by a day in your area, edit the date below or use "Mark any day".
 const NATIONAL_HOLIDAYS = [
-  { month: 0, day: 26, name: 'Republic Day' },
-  { month: 7, day: 15, name: 'Independence Day' },
-  { month: 9, day: 2, name: 'Gandhi Jayanti' },
+  { year: 2026, month: 0, day: 26, name: 'Republic Day' },
+  { year: 2026, month: 2, day: 4, name: 'Holi' },
+  { year: 2026, month: 2, day: 21, name: 'Id-ul-Fitr' },
+  { year: 2026, month: 2, day: 26, name: 'Ram Navami' },
+  { year: 2026, month: 2, day: 31, name: 'Mahavir Jayanti' },
+  { year: 2026, month: 3, day: 3, name: 'Good Friday' },
+  { year: 2026, month: 4, day: 1, name: 'Buddha Purnima' },
+  { year: 2026, month: 4, day: 27, name: 'Bakrid / Id-ul-Zuha' },
+  { year: 2026, month: 5, day: 26, name: 'Muharram' },
+  { year: 2026, month: 7, day: 15, name: 'Independence Day' },
+  { year: 2026, month: 7, day: 26, name: 'Id-e-Milad' },
+  { year: 2026, month: 8, day: 4, name: 'Janmashtami' },
+  { year: 2026, month: 9, day: 2, name: 'Gandhi Jayanti' },
+  { year: 2026, month: 9, day: 20, name: 'Dussehra' },
+  { year: 2026, month: 10, day: 8, name: 'Diwali' },
+  { year: 2026, month: 10, day: 24, name: 'Guru Nanak Jayanti' },
+  { year: 2026, month: 11, day: 25, name: 'Christmas' },
 ];
 
 function getNationalHolidayName(d) {
+  const year = d.getFullYear();
   const month = d.getMonth();
   const day = d.getDate();
-  const match = NATIONAL_HOLIDAYS.find(h => h.month === month && h.day === day);
+  const match = NATIONAL_HOLIDAYS.find(h => h.year === year && h.month === month && h.day === day);
   return match ? match.name : null;
 }
 
@@ -119,9 +139,12 @@ function isHolidayType(dayType) {
 
 /** Determine the default day type for a date that has no saved override. */
 function defaultDayType(d) {
-  if (isWeekendHoliday(d)) return DAY_TYPE.WEEKEND;
+  // Check national holiday first so a holiday that happens to fall on a
+  // Sat/Sun (e.g. Id-ul-Fitr, Diwali in this year's list) still shows its
+  // proper name instead of being swallowed into the generic Weekend bucket.
   const nationalName = getNationalHolidayName(d);
   if (nationalName) return DAY_TYPE.NATIONAL;
+  if (isWeekendHoliday(d)) return DAY_TYPE.WEEKEND;
   return DAY_TYPE.WORKING;
 }
 
@@ -223,9 +246,11 @@ function getEntry(key) {
 /** Migrates old-format entries (boolean isHoliday) to the new dayType model.
  * Old data is never lost — we just add a dayType field, inferred as best we can. */
 function migrateEntry(entry) {
-  if (entry.dayType) return entry; // already new format
-  const d = new Date(entry.dateMillis);
-  entry.dayType = entry.isHoliday ? defaultDayType(d) : DAY_TYPE.WORKING;
+  if (!entry.dayType) {
+    const d = new Date(entry.dateMillis);
+    entry.dayType = entry.isHoliday ? defaultDayType(d) : DAY_TYPE.WORKING;
+  }
+  if (entry.remark === undefined) entry.remark = '';
   return entry;
 }
 
@@ -244,7 +269,8 @@ function getOrBuildEntry(date) {
     enterTimeMillis: null,
     exitTimeMillis: null,
     enterTimeDisplay: null,
-    exitTimeDisplay: null
+    exitTimeDisplay: null,
+    remark: ''
   };
 }
 
@@ -264,6 +290,15 @@ function setDayType(date, dayType) {
   saveEntry(entry);
   return entry;
 }
+
+/** Sets/overrides the free-text remark for a given date. Empty string clears it. */
+function setRemark(date, remarkText) {
+  const entry = getOrBuildEntry(date);
+  entry.remark = (remarkText || '').trim().slice(0, 200);
+  saveEntry(entry);
+  return entry;
+}
+
 
 function saveEntry(entry) {
   const all = loadAllEntries();
@@ -379,10 +414,13 @@ const els = {
   statHours: document.getElementById('statHours'),
   statHolidays: document.getElementById('statHolidays'),
   monthList: document.getElementById('monthList'),
+  downloadPdfBtn: document.getElementById('downloadPdfBtn'),
   sheetBackdrop: document.getElementById('sheetBackdrop'),
   sheet: document.getElementById('sheet'),
   sheetTitle: document.getElementById('sheetTitle'),
   sheetOptions: document.getElementById('sheetOptions'),
+  sheetRemark: document.getElementById('sheetRemark'),
+  sheetSaveRemark: document.getElementById('sheetSaveRemark'),
   sheetCancel: document.getElementById('sheetCancel'),
 };
 
@@ -441,21 +479,22 @@ function renderToday() {
 }
 
 function describeEntry(entry) {
+  const remarkSuffix = entry.remark ? ` · 📝 ${entry.remark}` : '';
   if (isNonWorking(entry.dayType)) {
-    return { detail: DAY_TYPE_LABEL[entry.dayType], right: '—', cssClass: DAY_TYPE_CSS_CLASS[entry.dayType] || 'holiday' };
+    return { detail: DAY_TYPE_LABEL[entry.dayType] + remarkSuffix, right: '—', cssClass: DAY_TYPE_CSS_CLASS[entry.dayType] || 'holiday' };
   }
   if (entry.enterTimeDisplay && entry.exitTimeDisplay) {
     const mins = workedMinutes(entry);
     return {
-      detail: `${entry.enterTimeDisplay} → ${entry.exitTimeDisplay}`,
+      detail: `${entry.enterTimeDisplay} → ${entry.exitTimeDisplay}` + remarkSuffix,
       right: mins != null ? formatDuration(mins) : '--',
       cssClass: ''
     };
   }
   if (entry.enterTimeDisplay) {
-    return { detail: `Entered ${entry.enterTimeDisplay}`, right: 'In progress', cssClass: '' };
+    return { detail: `Entered ${entry.enterTimeDisplay}` + remarkSuffix, right: 'In progress', cssClass: '' };
   }
-  return { detail: 'No punches', right: '--', cssClass: '' };
+  return { detail: 'No punches' + remarkSuffix, right: '--', cssClass: '' };
 }
 
 function renderRecentList() {
@@ -524,6 +563,86 @@ function renderSummary() {
   }
 }
 
+/* ===================== Monthly summary PDF export =====================
+   No external library used — generates a clean, self-contained HTML
+   document and opens it in a new tab, then triggers the browser's native
+   Print dialog. Choosing "Save as PDF" there produces the file. This keeps
+   the app dependency-free and fully working offline (a CDN-hosted PDF
+   library would silently break export with no internet). */
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function downloadMonthlySummaryPdf() {
+  const year = summaryAnchor.getFullYear();
+  const monthIndex = summaryAnchor.getMonth();
+  const entries = getMonthEntries(year, monthIndex).slice().sort((a, b) => a.dateMillis - b.dateMillis);
+
+  const workDays = entries.filter(e => !isNonWorking(e.dayType) && e.enterTimeMillis).length;
+  const leaveDays = entries.filter(e => e.dayType === DAY_TYPE.LEAVE).length;
+  const holidays = entries.filter(e => isHolidayType(e.dayType)).length;
+  const totalMins = entries.reduce((sum, e) => sum + (workedMinutes(e) || 0), 0);
+
+  const rows = entries.map(entry => {
+    const d = new Date(entry.dateMillis);
+    const { detail, right } = describeEntry(entry);
+    const remark = entry.remark ? escapeHtml(entry.remark) : '';
+    return `<tr>
+      <td>${displayDate(d)}</td>
+      <td>${entry.dayOfWeek}</td>
+      <td>${escapeHtml(DAY_TYPE_LABEL[entry.dayType])}</td>
+      <td>${escapeHtml(detail)}</td>
+      <td>${escapeHtml(right)}</td>
+      <td>${remark}</td>
+    </tr>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<title>Office Time Logger — ${escapeHtml(monthLabel(summaryAnchor))}</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;color:#1A1A1A;margin:32px;}
+  h1{font-size:18px;margin-bottom:2px;}
+  h2{font-size:13px;font-weight:normal;color:#5A5747;margin-top:0;margin-bottom:20px;}
+  table{width:100%;border-collapse:collapse;font-size:11px;}
+  th,td{border:1px solid #D8D2BC;padding:6px 8px;text-align:left;}
+  th{background:#EDE7D6;}
+  .stats{display:flex;gap:24px;margin-bottom:20px;}
+  .stat{border:1px solid #D8D2BC;border-radius:6px;padding:10px 16px;}
+  .stat .v{font-size:18px;font-weight:bold;}
+  .stat .l{font-size:10px;color:#5A5747;text-transform:uppercase;}
+  @media print{ @page{margin:16mm;} }
+</style></head>
+<body>
+  <h1>Office Time Logger</h1>
+  <h2>Monthly Summary — ${escapeHtml(monthLabel(summaryAnchor))}</h2>
+  <div class="stats">
+    <div class="stat"><div class="v">${workDays}</div><div class="l">Working Days</div></div>
+    <div class="stat"><div class="v">${leaveDays}</div><div class="l">Leave</div></div>
+    <div class="stat"><div class="v">${holidays}</div><div class="l">Holidays</div></div>
+    <div class="stat"><div class="v">${formatDuration(totalMins)}</div><div class="l">Total Hours</div></div>
+  </div>
+  <table>
+    <thead><tr><th>Date</th><th>Day</th><th>Type</th><th>Detail</th><th>Hours</th><th>Remark</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <script>window.onload = () => window.print();<\/script>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  if (!win) {
+    alert('Please allow pop-ups for this site to download the PDF.');
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
+els.downloadPdfBtn.addEventListener('click', downloadMonthlySummaryPdf);
+
 /* ===================== Punch handling ===================== */
 async function handlePunch(isEnter) {
   els.btnEnter.disabled = true;
@@ -579,6 +698,7 @@ function openDayStatusSheet(date) {
   const isAutoLocked = entry.dayType === DAY_TYPE.WEEKEND || entry.dayType === DAY_TYPE.NATIONAL;
 
   els.sheetTitle.textContent = displayDateFull(date);
+  els.sheetRemark.value = entry.remark || '';
 
   // Warn if punches exist and would be cleared by switching to non-working.
   const hasPunches = !!entry.enterTimeMillis;
@@ -620,6 +740,7 @@ function applyDayStatus(dayType, hadPunches) {
     if (!ok) return;
   }
   setDayType(sheetTargetDate, dayType);
+  setRemark(sheetTargetDate, els.sheetRemark.value);
   closeDayStatusSheet();
   renderToday();
   renderRecentList();
@@ -630,6 +751,15 @@ function closeDayStatusSheet() {
   els.sheetBackdrop.classList.remove('show');
   sheetTargetDate = null;
 }
+
+els.sheetSaveRemark.addEventListener('click', () => {
+  if (!sheetTargetDate) return;
+  setRemark(sheetTargetDate, els.sheetRemark.value);
+  renderToday();
+  renderRecentList();
+  if (els.viewSummary.classList.contains('active')) renderSummary();
+  closeDayStatusSheet();
+});
 
 els.sheetBackdrop.addEventListener('click', (e) => {
   if (e.target === els.sheetBackdrop) closeDayStatusSheet();

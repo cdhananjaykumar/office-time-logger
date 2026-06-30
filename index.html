@@ -432,6 +432,63 @@
   .dot.festival{background:#7A3686;}
   .dot.national{background:#2F4B9E;}
   .dot.weekend{background:var(--holiday);}
+
+  .sheet-remark-block{
+    margin-bottom:10px;
+  }
+  .sheet-remark-label{
+    display:block;
+    font-size:11px;
+    font-weight:700;
+    letter-spacing:0.04em;
+    text-transform:uppercase;
+    color:var(--ink-soft);
+    margin-bottom:6px;
+  }
+  .sheet-remark-input{
+    width:100%;
+    background:#fff;
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:10px 12px;
+    font-family:'Inter',sans-serif;
+    font-size:14px;
+    color:var(--ink);
+    resize:vertical;
+    box-sizing:border-box;
+  }
+  .sheet-remark-input:focus{
+    outline:none;
+    border-color:var(--ink-deep);
+  }
+  .sheet-save-remark{
+    width:100%;
+    margin-top:8px;
+    background:var(--ink-deep);
+    color:var(--paper);
+    border:none;
+    border-radius:12px;
+    padding:11px;
+    font-size:13px;
+    font-weight:700;
+    cursor:pointer;
+  }
+  .sheet-save-remark:active{transform:scale(0.98);}
+
+  .download-pdf-btn{
+    width:100%;
+    background:var(--paper-dark);
+    border:1px solid var(--line);
+    color:var(--ink);
+    border-radius:12px;
+    padding:12px;
+    font-size:13px;
+    font-weight:700;
+    cursor:pointer;
+    margin-top:14px;
+  }
+  .download-pdf-btn:active{transform:scale(0.98);}
+
   .sheet-cancel{
     width:100%;
     background:none;
@@ -529,6 +586,8 @@
       <div class="stat-card"><div class="v" id="statHours">0h 0m</div><div class="l">TOTAL HOURS</div></div>
     </div>
 
+    <button class="download-pdf-btn" id="downloadPdfBtn">⬇ Download Monthly Summary (PDF)</button>
+
     <div class="section-head" style="margin-top:4px;">
       <h2>Day by Day</h2>
     </div>
@@ -543,6 +602,11 @@
     <div class="sheet-handle"></div>
     <div class="sheet-title" id="sheetTitle">Mark this day</div>
     <div class="sheet-options" id="sheetOptions"></div>
+    <div class="sheet-remark-block">
+      <label for="sheetRemark" class="sheet-remark-label">Remark (optional)</label>
+      <textarea id="sheetRemark" class="sheet-remark-input" rows="2" maxlength="200" placeholder="e.g. WFH, client visit, half day..."></textarea>
+      <button class="sheet-save-remark" id="sheetSaveRemark">Save Remark</button>
+    </div>
     <button class="sheet-cancel" id="sheetCancel">Cancel</button>
   </div>
 </div>
