@@ -391,6 +391,7 @@ const els = {
   todayDate: document.getElementById('todayDate'),
   statusTag: document.getElementById('statusTag'),
   markTodayBtn: document.getElementById('markTodayBtn'),
+  leaveTodayBtn: document.getElementById('leaveTodayBtn'),
   valEnter: document.getElementById('valEnter'),
   valExit: document.getElementById('valExit'),
   valTotal: document.getElementById('valTotal'),
@@ -469,13 +470,23 @@ function renderToday() {
     els.btnExit.disabled = !entry.enterTimeMillis || !!entry.exitTimeMillis;
   }
 
-  // The "Mark today as..." link is hidden once a punch has been made today,
-  // since changing the day type would wipe that punch — keeping it visible
-  // until then avoids an accidental data-losing tap.
-  els.markTodayBtn.style.display = entry.enterTimeMillis ? 'none' : '';
-  els.markTodayBtn.textContent = nonWorking
-    ? `Marked as ${DAY_TYPE_LABEL[entry.dayType]} — tap to change`
-    : 'Mark today as Leave / Holiday →';
+  // The "Mark today as Leave" / "More options" controls are hidden once a
+  // punch has been made today, since changing the day type would wipe that
+  // punch — keeping them visible until then avoids an accidental
+  // data-losing tap. Once today is already non-working, swap to a single
+  // "tap to change" link instead of showing both.
+  if (entry.enterTimeMillis) {
+    els.leaveTodayBtn.style.display = 'none';
+    els.markTodayBtn.style.display = 'none';
+  } else if (nonWorking) {
+    els.leaveTodayBtn.style.display = 'none';
+    els.markTodayBtn.style.display = '';
+    els.markTodayBtn.textContent = `Marked as ${DAY_TYPE_LABEL[entry.dayType]} — tap to change`;
+  } else {
+    els.leaveTodayBtn.style.display = '';
+    els.markTodayBtn.style.display = '';
+    els.markTodayBtn.textContent = 'More options (Festival / Holiday / Working) →';
+  }
 }
 
 function describeEntry(entry) {
@@ -766,6 +777,19 @@ els.sheetBackdrop.addEventListener('click', (e) => {
 });
 els.sheetCancel.addEventListener('click', closeDayStatusSheet);
 els.markTodayBtn.addEventListener('click', () => openDayStatusSheet(new Date()));
+
+els.leaveTodayBtn.addEventListener('click', () => {
+  const today = new Date();
+  const entry = getOrBuildEntry(today);
+  if (entry.enterTimeMillis) {
+    const ok = confirm('This will clear the Enter/Exit times already logged for today. Continue?');
+    if (!ok) return;
+  }
+  setDayType(today, DAY_TYPE.LEAVE);
+  renderToday();
+  renderRecentList();
+  if (els.viewSummary.classList.contains('active')) renderSummary();
+});
 
 /* ===================== Navigation ===================== */
 function showView(name) {
