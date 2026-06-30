@@ -222,6 +222,28 @@
     letter-spacing:0.02em;
   }
 
+  .leave-btn{
+    width:100%;
+    margin-top:12px;
+    border:none;
+    border-radius:14px;
+    padding:14px 0;
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:0.03em;
+    color:#fff;
+    background:var(--exit-deep);
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    transition:transform 0.12s ease, opacity 0.15s ease;
+  }
+  .leave-btn:active{transform:scale(0.97);}
+  .leave-btn:disabled{opacity:0.38; cursor:not-allowed; transform:none;}
+  .leave-btn svg{width:16px;height:16px;}
+
   .status-msg{
     margin-top:12px;
     font-size:12.5px;
@@ -525,9 +547,6 @@
         <span class="date" id="todayDate">—</span>
         <span class="status-tag" id="statusTag"></span>
       </div>
-      <div class="mark-today-row">
-        <button class="link-btn small" id="markTodayBtn">Mark today as Leave / Holiday →</button>
-      </div>
 
       <div class="stamp-row">
         <div class="stamp-cell enter" id="cellEnter">
@@ -558,6 +577,15 @@
       </div>
 
       <div class="status-msg" id="statusMsg"></div>
+
+      <button class="leave-btn" id="leaveTodayBtn">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M19 13H5v-2h14v2z" fill="white"/></svg>
+        MARK TODAY AS LEAVE
+      </button>
+
+      <div class="mark-today-row">
+        <button class="link-btn small" id="markTodayBtn">More options (Festival / Holiday / Working) →</button>
+      </div>
     </div>
 
     <div class="section-head">

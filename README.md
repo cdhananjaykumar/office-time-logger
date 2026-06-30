@@ -20,8 +20,11 @@ offline — with **zero app-store install and no build tools needed**.
   - **Festival / Office Holiday** — add these yourself for any date
   - **Leave** — mark any day you're taking off
   - On any non-working day, the Enter/Exit buttons disable themselves
-- **Mark a day** two ways:
-  - Tap **"Mark today as Leave / Holiday"** on the Home screen for today
+- **Mark a day** several ways:
+  - A dedicated red **MARK TODAY AS LEAVE** button sits right under the
+    Enter/Exit buttons on the Home screen — separate and visually distinct
+    so a quick tap can't be confused with starting your day
+  - Tap **"More options"** on Home for Festival/Holiday/Working overrides
   - Or tap **any day** in Monthly Summary to set/change its status —
     past or future
 - **Remarks** — add a free-text note to any day (e.g. "WFH", "client visit",
