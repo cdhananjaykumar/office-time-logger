@@ -511,6 +511,24 @@
   }
   .download-pdf-btn:active{transform:scale(0.98);}
 
+  /* Rule #6 — hours column colors in summary */
+  .right.hours-green{color:#1E8E3E;font-weight:700;}
+  .right.hours-red{color:#C0392B;font-weight:700;}
+
+  /* Session list inside bottom sheet */
+  .sheet-sessions{margin-bottom:10px;}
+  .session-row{
+    display:flex;
+    justify-content:space-between;
+    font-size:13px;
+    color:var(--ink);
+    padding:6px 0;
+    border-bottom:1px solid var(--line);
+    gap:8px;
+  }
+  .session-row:last-child{border-bottom:none;}
+  .session-dur{color:var(--ink-soft);font-size:12px;}
+
   .sheet-cancel{
     width:100%;
     background:none;

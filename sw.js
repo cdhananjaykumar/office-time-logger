@@ -1,4 +1,4 @@
-const CACHE_NAME = 'office-time-logger-v1';
+const CACHE_NAME = 'office-time-logger-v4';
 const APP_SHELL = [
   './index.html',
   './app.js',

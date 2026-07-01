@@ -1,256 +1,206 @@
-/* ===================== Storage layer (localStorage) ===================== */
-const STORE_KEY = 'office_time_logger_entries_v1';
+/* ===================== Storage helpers ===================== */
+const STORAGE_KEY = 'office_time_logger_entries_v1';
 
 function loadAllEntries() {
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch (e) {
-    console.error('Failed to read storage', e);
-    return {};
-  }
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }
+  catch { return {}; }
 }
-
 function saveAllEntries(entries) {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(entries));
-  } catch (e) {
-    console.error('Failed to write storage', e);
-  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
 }
 
-/* ===================== Date helpers ===================== */
+/* ===================== Date / time utilities ===================== */
 function dateKey(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
-
 function dayCode(d) {
   return ['SUN','MON','TUE','WED','THU','FRI','SAT'][d.getDay()];
 }
-
 function isWeekendHoliday(d) {
-  const day = d.getDay(); // 0 = Sunday, 6 = Saturday
+  const day = d.getDay();
   return day === 0 || day === 6;
 }
-
 function displayDate(d) {
-  return d.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
-
 function displayDateFull(d) {
-  return d.toLocaleDateString('en-US', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
 }
-
 function displayTime(d) {
   return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 }
-
 function monthLabel(d) {
   return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 }
-
 function formatDuration(totalMinutes) {
   const h = Math.floor(totalMinutes / 60);
   const m = Math.round(totalMinutes % 60);
   return `${h}h ${m}m`;
 }
-
 function startOfDay(d) {
-  const c = new Date(d);
-  c.setHours(0, 0, 0, 0);
-  return c;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
-
 function daysInMonth(year, monthIndex) {
   return new Date(year, monthIndex + 1, 0).getDate();
 }
 
-/* ===================== Day type model =====================
-   Every day has exactly one "dayType":
-   - WORKING:  a normal working day (default for any weekday)
-   - WEEKEND:  Saturday/Sunday, auto-detected, can't be manually removed
-   - NATIONAL: fixed-date national holiday (pre-filled list below), repeats every year
-   - FESTIVAL: a holiday the user adds themselves (festival, office-declared, etc.)
-   - LEAVE:    the user is on leave that day
-   These replace the old simple isHoliday boolean. Old saved entries (which
-   only had isHoliday: true/false) are migrated automatically on load. */
+/* ===================== Locking helpers ===================== */
+/**
+ * Returns true if a given date is a past calendar day (i.e. its date key
+ * is earlier than today's). Used to determine if a day is fully locked.
+ */
+function isPastDate(d) {
+  return dateKey(d) < dateKey(new Date());
+}
 
-const DAY_TYPE = {
-  WORKING: 'WORKING',
-  WEEKEND: 'WEEKEND',
-  NATIONAL: 'NATIONAL',
-  FESTIVAL: 'FESTIVAL',
-  LEAVE: 'LEAVE',
-};
+/**
+ * A day is "fully locked" (no edits of any kind) when:
+ *  - The calendar date has changed (it's now a past day), OR
+ *  - It's a Leave day and the current time is past 13:00 today
+ * Weekends and National Holidays are always view-only (not user-editable)
+ * but those are handled separately via the `isAutoLocked` flag in the sheet.
+ */
+function isDayLocked(entry) {
+  const entryDate = new Date(entry.dateMillis);
+
+  // Past date: fully locked regardless of type
+  if (isPastDate(entryDate)) return true;
+
+  // Leave marked after 13:00 today locks automatically
+  if (entry.dayType === 'LEAVE') {
+    const now = new Date();
+    if (now.getHours() >= 13) return true;
+  }
+
+  // Exit punched on today's working day — still editable (can re-enter)
+  return false;
+}
+
+/* ===================== Day-type definitions ===================== */
+const DAY_TYPE = { WORKING: 'WORKING', WEEKEND: 'WEEKEND', NATIONAL: 'NATIONAL', FESTIVAL: 'FESTIVAL', LEAVE: 'LEAVE' };
 
 const DAY_TYPE_LABEL = {
-  WORKING: 'Working Day',
-  WEEKEND: 'Weekend',
-  NATIONAL: 'National Holiday',
-  FESTIVAL: 'Festival Holiday',
-  LEAVE: 'Leave',
+  WORKING: 'Working Day', WEEKEND: 'Weekend', NATIONAL: 'National Holiday',
+  FESTIVAL: 'Festival Holiday', LEAVE: 'Leave',
 };
 
-// National/festival holidays — given as exact (year, month, day) dates, since
-// several of these (Holi, Eid, Diwali, etc.) follow the lunar calendar and
-// shift every year, so a fixed month/day repeat-every-year rule would be wrong.
-// month is 0-indexed (0 = January) to match JS Date conventions.
-// Entries marked with a trailing "*" in the source schedule (festivals subject
-// to moon-sighting) are listed as normal entries here — if the actual observed
-// date differs by a day in your area, edit the date below or use "Mark any day".
+// National/festival holidays as exact dated (year, month 1-indexed, day) entries.
+// Lunar-calendar holidays shift yearly, so per-year entries are the only correct model.
 const NATIONAL_HOLIDAYS = [
-  { year: 2026, month: 0, day: 26, name: 'Republic Day' },
-  { year: 2026, month: 2, day: 4, name: 'Holi' },
-  { year: 2026, month: 2, day: 21, name: 'Id-ul-Fitr' },
-  { year: 2026, month: 2, day: 26, name: 'Ram Navami' },
-  { year: 2026, month: 2, day: 31, name: 'Mahavir Jayanti' },
-  { year: 2026, month: 3, day: 3, name: 'Good Friday' },
-  { year: 2026, month: 4, day: 1, name: 'Buddha Purnima' },
-  { year: 2026, month: 4, day: 27, name: 'Bakrid / Id-ul-Zuha' },
-  { year: 2026, month: 5, day: 26, name: 'Muharram' },
-  { year: 2026, month: 7, day: 15, name: 'Independence Day' },
-  { year: 2026, month: 7, day: 26, name: 'Id-e-Milad' },
-  { year: 2026, month: 8, day: 4, name: 'Janmashtami' },
-  { year: 2026, month: 9, day: 2, name: 'Gandhi Jayanti' },
-  { year: 2026, month: 9, day: 20, name: 'Dussehra' },
-  { year: 2026, month: 10, day: 8, name: 'Diwali' },
-  { year: 2026, month: 10, day: 24, name: 'Guru Nanak Jayanti' },
-  { year: 2026, month: 11, day: 25, name: 'Christmas' },
+  { year: 2026, month: 1, day: 26, name: 'Republic Day' },
+  { year: 2026, month: 3, day: 4,  name: 'Holi' },
+  { year: 2026, month: 3, day: 21, name: 'Id-ul-Fitr' },
+  { year: 2026, month: 3, day: 26, name: 'Ram Navami' },
+  { year: 2026, month: 3, day: 31, name: 'Mahavir Jayanti' },
+  { year: 2026, month: 4, day: 3,  name: 'Good Friday' },
+  { year: 2026, month: 5, day: 1,  name: 'Buddha Purnima' },
+  { year: 2026, month: 5, day: 27, name: 'Bakrid / Id-ul-Zuha' },
+  { year: 2026, month: 6, day: 26, name: 'Muharram' },
+  { year: 2026, month: 8, day: 15, name: 'Independence Day' },
+  { year: 2026, month: 8, day: 26, name: 'Id-e-Milad' },
+  { year: 2026, month: 9, day: 4,  name: 'Janmashtami' },
+  { year: 2026, month: 10, day: 2, name: 'Gandhi Jayanti' },
+  { year: 2026, month: 10, day: 20, name: 'Dussehra' },
+  { year: 2026, month: 11, day: 8, name: 'Diwali' },
+  { year: 2026, month: 11, day: 24, name: 'Guru Nanak Jayanti' },
+  { year: 2026, month: 12, day: 25, name: 'Christmas' },
 ];
 
 function getNationalHolidayName(d) {
-  const year = d.getFullYear();
-  const month = d.getMonth();
-  const day = d.getDate();
+  const year = d.getFullYear(), month = d.getMonth() + 1, day = d.getDate();
   const match = NATIONAL_HOLIDAYS.find(h => h.year === year && h.month === month && h.day === day);
   return match ? match.name : null;
 }
 
-function isNonWorking(dayType) {
-  return dayType !== DAY_TYPE.WORKING;
-}
-
+function isNonWorking(dayType) { return dayType !== DAY_TYPE.WORKING; }
 function isHolidayType(dayType) {
   return dayType === DAY_TYPE.WEEKEND || dayType === DAY_TYPE.NATIONAL || dayType === DAY_TYPE.FESTIVAL;
 }
 
-/** Determine the default day type for a date that has no saved override. */
 function defaultDayType(d) {
-  // Check national holiday first so a holiday that happens to fall on a
-  // Sat/Sun (e.g. Id-ul-Fitr, Diwali in this year's list) still shows its
-  // proper name instead of being swallowed into the generic Weekend bucket.
+  // National holidays take priority over weekends (holiday falling on Sat/Sun
+  // still shows its proper name).
   const nationalName = getNationalHolidayName(d);
   if (nationalName) return DAY_TYPE.NATIONAL;
   if (isWeekendHoliday(d)) return DAY_TYPE.WEEKEND;
   return DAY_TYPE.WORKING;
 }
 
-/* ===================== Network time provider =====================
-   Browsers cannot do raw NTP (UDP), so we use a layered HTTPS strategy:
-   1) Try a couple of small JSON "world time" style endpoints.
-   2) Fall back to reading the Date response header from a reliable HTTPS
-      request (a trick browsers themselves use to detect clock skew) —
-      this works against almost any HTTPS server, so it's a robust fallback.
-   If everything fails (e.g. fully offline), we report failure rather than
-   silently trusting the device clock, so a punch is never logged on an
-   unverified time. */
-
+/* ===================== Network time ===================== */
 async function fetchNetworkTime() {
-  // Try several independent, free, CORS-enabled time APIs in order.
-  // Using more than one provider means a single API going down or rate-
-  // limiting us doesn't take the whole app down with it.
-  const providers = [
-    fetchTimeApiIo,
-    fetchTimeApiWorld,
-    fetchFromHeader,
-  ];
-
-  for (const provider of providers) {
-    try {
-      const result = await provider();
-      if (result && isPlausibleTime(result)) return { success: true, date: result };
-    } catch (e) {
-      // try next provider
-    }
-  }
-
-  return {
-    success: false,
-    reason: 'Could not reach a time server. Check your internet connection and try again.'
-  };
+  try { return { success: true, date: await withTimeout(fetchTimeApiIo) }; } catch {}
+  try { return { success: true, date: await withTimeout(fetchTimeApiWorld) }; } catch {}
+  try { return { success: true, date: await withTimeout(fetchFromHeader) }; } catch {}
+  return { success: false, reason: 'Could not reach a time server. Please check your internet connection.' };
 }
-
 function isPlausibleTime(date) {
-  // Reject obviously broken responses (epoch 0, NaN, or wildly off from
-  // the device clock) rather than trusting a malformed API reply blindly.
-  if (!date || isNaN(date.getTime())) return false;
-  const fiveYearsMs = 1000 * 60 * 60 * 24 * 365 * 5;
-  const deviceNow = Date.now();
-  return Math.abs(date.getTime() - deviceNow) < fiveYearsMs && date.getFullYear() > 2000;
+  const y = date.getFullYear();
+  return y >= 2024 && y <= 2035;
 }
-
-function withTimeout(promiseFactory, ms = 6000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ms);
-  return promiseFactory(controller.signal).finally(() => clearTimeout(timeout));
+function withTimeout(fn, ms = 6000) {
+  return Promise.race([
+    fn(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+  ]);
 }
-
 async function fetchTimeApiIo() {
-  return withTimeout(async (signal) => {
-    const res = await fetch('https://timeapi.io/api/time/current/zone?timeZone=UTC', {
-      signal, cache: 'no-store'
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data || !data.dateTime) return null;
-    // dateTime is like "2026-06-27T12:34:56.789" in UTC, no offset suffix
-    return new Date(data.dateTime + 'Z');
-  });
+  const r = await fetch('https://timeapi.io/api/time/current/zone?timeZone=Asia/Kolkata');
+  const j = await r.json();
+  const d = new Date(j.dateTime);
+  if (!isPlausibleTime(d)) throw new Error('bad time');
+  return d;
 }
-
 async function fetchTimeApiWorld() {
-  return withTimeout(async (signal) => {
-    const res = await fetch('https://timeapi.world/api/timezone/Etc/UTC', {
-      signal, cache: 'no-store'
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data && data.unixtime) return new Date(data.unixtime * 1000);
-    if (data && data.utc_datetime) return new Date(data.utc_datetime);
-    return null;
-  });
+  const r = await fetch('https://timeapi.world/api/time/current/zone?timeZone=Asia/Kolkata');
+  const j = await r.json();
+  const d = new Date(j.dateTime);
+  if (!isPlausibleTime(d)) throw new Error('bad time');
+  return d;
 }
-
 async function fetchFromHeader() {
-  // Last-resort fallback: read the Date header from a same-origin-friendly
-  // HTTPS response. Only works if the server sends CORS headers; kept as a
-  // final attempt in case both dedicated time APIs are unreachable.
-  return withTimeout(async (signal) => {
-    const res = await fetch('https://timeapi.io/', { signal, cache: 'no-store', mode: 'cors' });
-    const headerDate = res.headers.get('date');
-    if (!headerDate) return null;
-    return new Date(headerDate);
-  });
+  const r = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
+  const dateHeader = r.headers.get('date');
+  if (!dateHeader) throw new Error('no date header');
+  const d = new Date(dateHeader);
+  if (!isPlausibleTime(d)) throw new Error('bad time');
+  return d;
 }
 
-/* ===================== Repository (business logic) ===================== */
+/* ===================== Entry storage / model ===================== */
+/**
+ * An entry's punch sessions are stored as an array of
+ * { enterMillis, enterDisplay, exitMillis?, exitDisplay? } objects.
+ * This replaces the old single enterTimeMillis/exitTimeMillis pair.
+ */
 function getEntry(key) {
-  const all = loadAllEntries();
-  const raw = all[key] || null;
+  const raw = loadAllEntries()[key] || null;
   return raw ? migrateEntry(raw) : null;
 }
 
-/** Migrates old-format entries (boolean isHoliday) to the new dayType model.
- * Old data is never lost — we just add a dayType field, inferred as best we can. */
 function migrateEntry(entry) {
+  // v1/v2: boolean isHoliday → dayType
   if (!entry.dayType) {
     const d = new Date(entry.dateMillis);
     entry.dayType = entry.isHoliday ? defaultDayType(d) : DAY_TYPE.WORKING;
   }
   if (entry.remark === undefined) entry.remark = '';
+
+  // v3 → v4: single enter/exit pair → sessions array
+  if (!entry.sessions) {
+    entry.sessions = [];
+    if (entry.enterTimeMillis) {
+      entry.sessions.push({
+        enterMillis: entry.enterTimeMillis,
+        enterDisplay: entry.enterTimeDisplay || displayTime(new Date(entry.enterTimeMillis)),
+        exitMillis: entry.exitTimeMillis || null,
+        exitDisplay: entry.exitTimeDisplay || null,
+      });
+    }
+    // Keep old fields as dead data (don't delete — avoids confusion if old sw.js caches serve a page that still references them)
+  }
   return entry;
 }
 
@@ -258,47 +208,17 @@ function getOrBuildEntry(date) {
   const key = dateKey(date);
   const existing = getEntry(key);
   if (existing) return existing;
-
   const dayType = defaultDayType(date);
   return {
     dateString: key,
     dateMillis: startOfDay(date).getTime(),
     dayOfWeek: dayCode(date),
-    dayType: dayType,
-    isHoliday: isHolidayType(dayType), // kept for display convenience/back-compat
-    enterTimeMillis: null,
-    exitTimeMillis: null,
-    enterTimeDisplay: null,
-    exitTimeDisplay: null,
-    remark: ''
+    dayType,
+    isHoliday: isHolidayType(dayType),
+    sessions: [],
+    remark: '',
   };
 }
-
-/** Sets/overrides the day type for a given date (e.g. mark as Leave, Festival,
- * or reset back to Working/auto-detected). Clears punch data if the new type
- * is non-working, since a holiday/leave day shouldn't carry stray punches. */
-function setDayType(date, dayType) {
-  const entry = getOrBuildEntry(date);
-  entry.dayType = dayType;
-  entry.isHoliday = isHolidayType(dayType);
-  if (isNonWorking(dayType)) {
-    entry.enterTimeMillis = null;
-    entry.exitTimeMillis = null;
-    entry.enterTimeDisplay = null;
-    entry.exitTimeDisplay = null;
-  }
-  saveEntry(entry);
-  return entry;
-}
-
-/** Sets/overrides the free-text remark for a given date. Empty string clears it. */
-function setRemark(date, remarkText) {
-  const entry = getOrBuildEntry(date);
-  entry.remark = (remarkText || '').trim().slice(0, 200);
-  saveEntry(entry);
-  return entry;
-}
-
 
 function saveEntry(entry) {
   const all = loadAllEntries();
@@ -306,10 +226,53 @@ function saveEntry(entry) {
   saveAllEntries(all);
 }
 
-function workedMinutes(entry) {
-  if (!entry.enterTimeMillis || !entry.exitTimeMillis) return null;
-  const diff = entry.exitTimeMillis - entry.enterTimeMillis;
-  return diff > 0 ? diff / 60000 : null;
+/**
+ * Total worked minutes for a day = sum of all completed sessions.
+ * An open session (entered but not exited yet) contributes 0 until closed.
+ */
+function totalWorkedMinutes(entry) {
+  let total = 0;
+  for (const s of (entry.sessions || [])) {
+    if (s.enterMillis && s.exitMillis && s.exitMillis > s.enterMillis) {
+      total += (s.exitMillis - s.enterMillis) / 60000;
+    }
+  }
+  return total > 0 ? total : null;
+}
+
+/** True if there is an open session (entered but not exited). */
+function hasOpenSession(entry) {
+  return (entry.sessions || []).some(s => s.enterMillis && !s.exitMillis);
+}
+
+/** True if any session exists at all (entered at least once). */
+function hasAnyPunch(entry) {
+  return (entry.sessions || []).length > 0;
+}
+
+/** The most recent open session, or null. */
+function openSession(entry) {
+  return (entry.sessions || []).slice().reverse().find(s => s.enterMillis && !s.exitMillis) || null;
+}
+
+function setDayType(date, dayType) {
+  const entry = getOrBuildEntry(date);
+  if (isDayLocked(entry)) return entry; // locked, ignore
+  entry.dayType = dayType;
+  entry.isHoliday = isHolidayType(dayType);
+  if (isNonWorking(dayType)) {
+    entry.sessions = [];
+  }
+  saveEntry(entry);
+  return entry;
+}
+
+function setRemark(date, remarkText) {
+  const entry = getOrBuildEntry(date);
+  if (isDayLocked(entry)) return entry; // locked, ignore
+  entry.remark = (remarkText || '').trim().slice(0, 200);
+  saveEntry(entry);
+  return entry;
 }
 
 const PUNCH_OK = 'ok';
@@ -320,11 +283,19 @@ function punchEnter(networkDate) {
   if (isNonWorking(entry.dayType)) {
     return { status: PUNCH_ERROR, message: `Today is marked as ${DAY_TYPE_LABEL[entry.dayType]}. No punch needed.` };
   }
-  if (entry.enterTimeMillis) {
-    return { status: PUNCH_ERROR, message: `You've already punched Enter today at ${entry.enterTimeDisplay}.` };
+  if (isDayLocked(entry)) {
+    return { status: PUNCH_ERROR, message: 'This day is locked and cannot be edited.' };
   }
-  entry.enterTimeMillis = networkDate.getTime();
-  entry.enterTimeDisplay = displayTime(networkDate);
+  if (hasOpenSession(entry)) {
+    const s = openSession(entry);
+    return { status: PUNCH_ERROR, message: `Already entered at ${s.enterDisplay}. Exit first.` };
+  }
+  entry.sessions.push({
+    enterMillis: networkDate.getTime(),
+    enterDisplay: displayTime(networkDate),
+    exitMillis: null,
+    exitDisplay: null,
+  });
   saveEntry(entry);
   return { status: PUNCH_OK, entry };
 }
@@ -334,25 +305,25 @@ function punchExit(networkDate) {
   if (isNonWorking(entry.dayType)) {
     return { status: PUNCH_ERROR, message: `Today is marked as ${DAY_TYPE_LABEL[entry.dayType]}. No punch needed.` };
   }
-  if (!entry.enterTimeMillis) {
+  if (isDayLocked(entry)) {
+    return { status: PUNCH_ERROR, message: 'This day is locked and cannot be edited.' };
+  }
+  const open = openSession(entry);
+  if (!open) {
     return { status: PUNCH_ERROR, message: "You haven't punched Enter yet today." };
   }
-  if (entry.exitTimeMillis) {
-    return { status: PUNCH_ERROR, message: `You've already punched Exit today at ${entry.exitTimeDisplay}.` };
-  }
-  if (networkDate.getTime() <= entry.enterTimeMillis) {
+  if (networkDate.getTime() <= open.enterMillis) {
     return { status: PUNCH_ERROR, message: 'Exit time cannot be before your Enter time.' };
   }
-  entry.exitTimeMillis = networkDate.getTime();
-  entry.exitTimeDisplay = displayTime(networkDate);
+  open.exitMillis = networkDate.getTime();
+  open.exitDisplay = displayTime(networkDate);
   saveEntry(entry);
   return { status: PUNCH_OK, entry };
 }
 
 function getRecentEntries(limit = 20) {
   const all = loadAllEntries();
-  return Object.values(all)
-    .map(migrateEntry)
+  return Object.values(all).map(migrateEntry)
     .sort((a, b) => b.dateMillis - a.dateMillis)
     .slice(0, limit);
 }
@@ -373,19 +344,18 @@ function getMonthEntries(year, monthIndex) {
         dateString: key,
         dateMillis: startOfDay(d).getTime(),
         dayOfWeek: dayCode(d),
-        dayType: dayType,
+        dayType,
         isHoliday: isHolidayType(dayType),
-        enterTimeMillis: null,
-        exitTimeMillis: null,
-        enterTimeDisplay: null,
-        exitTimeDisplay: null
+        sessions: [],
+        remark: '',
       });
     }
   }
-  return result.sort((a, b) => b.dateMillis - a.dateMillis);
+  // Day 1 → 31 ascending (rule #5)
+  return result.sort((a, b) => a.dateMillis - b.dateMillis);
 }
 
-/* ===================== UI rendering ===================== */
+/* ===================== UI element bindings ===================== */
 const els = {
   headerClock: document.getElementById('headerClock'),
   todayDate: document.getElementById('todayDate'),
@@ -433,20 +403,18 @@ function tickHeaderClock() {
 setInterval(tickHeaderClock, 1000);
 tickHeaderClock();
 
-// Maps a dayType to the CSS class used for status tags / log item accents.
 const DAY_TYPE_CSS_CLASS = {
-  WEEKEND: 'weekend',
-  NATIONAL: 'national',
-  FESTIVAL: 'festival',
-  LEAVE: 'leave',
+  WEEKEND: 'weekend', NATIONAL: 'national', FESTIVAL: 'festival', LEAVE: 'leave',
 };
 
+/* ===================== Rendering ===================== */
 function renderToday() {
   const now = new Date();
   els.todayDate.textContent = displayDateFull(now);
 
   const entry = getOrBuildEntry(now);
   const nonWorking = isNonWorking(entry.dayType);
+  const locked = isDayLocked(entry);
 
   if (nonWorking) {
     const cls = DAY_TYPE_CSS_CLASS[entry.dayType] || '';
@@ -457,33 +425,50 @@ function renderToday() {
     els.statusTag.textContent = '';
   }
 
-  els.valEnter.textContent = entry.enterTimeDisplay || '--:--';
-  els.valExit.textContent = entry.exitTimeDisplay || '--:--';
-  const mins = workedMinutes(entry);
-  els.valTotal.textContent = mins != null ? formatDuration(mins) : '--';
+  // Show most recent session's enter/exit for the card display
+  const sessions = entry.sessions || [];
+  const lastSession = sessions[sessions.length - 1] || null;
+  const open = openSession(entry);
+  const totalMins = totalWorkedMinutes(entry);
 
-  if (nonWorking) {
+  els.valEnter.textContent = lastSession ? lastSession.enterDisplay : '--:--';
+  els.valExit.textContent = (lastSession && lastSession.exitDisplay) ? lastSession.exitDisplay : '--:--';
+  els.valTotal.textContent = totalMins != null ? formatDuration(totalMins) : '--';
+
+  // Session count badge (only when > 1 session recorded today)
+  const sessionCount = sessions.length;
+  const sessionLabel = sessionCount > 1 ? ` (${sessionCount} sessions)` : '';
+  if (sessionCount > 1) {
+    els.valTotal.textContent = (totalMins != null ? formatDuration(totalMins) : '--') + sessionLabel;
+  }
+
+  // Button states
+  if (nonWorking || locked) {
     els.btnEnter.disabled = true;
     els.btnExit.disabled = true;
   } else {
-    els.btnEnter.disabled = !!entry.enterTimeMillis;
-    els.btnExit.disabled = !entry.enterTimeMillis || !!entry.exitTimeMillis;
+    els.btnEnter.disabled = !!open; // disabled if a session is open
+    els.btnExit.disabled = !open;   // disabled if no open session
   }
 
-  // The "Mark today as Leave" / "More options" controls are hidden once a
-  // punch has been made today, since changing the day type would wipe that
-  // punch — keeping them visible until then avoids an accidental
-  // data-losing tap. Once today is already non-working, swap to a single
-  // "tap to change" link instead of showing both.
-  if (entry.enterTimeMillis) {
+  // Leave + More-options controls
+  // Leave can be set until 13:00 today (if before 13:00 and no punches yet).
+  // Once any punch exists today, Leave is not applicable.
+  const isAfter1pm = now.getHours() >= 13;
+  const hasPunches = hasAnyPunch(entry);
+
+  if (locked || hasPunches) {
+    // Day locked (past date or Leave after 1pm) or working day started — hide controls
     els.leaveTodayBtn.style.display = 'none';
     els.markTodayBtn.style.display = 'none';
   } else if (nonWorking) {
+    // Already marked non-working but not locked yet
     els.leaveTodayBtn.style.display = 'none';
     els.markTodayBtn.style.display = '';
     els.markTodayBtn.textContent = `Marked as ${DAY_TYPE_LABEL[entry.dayType]} — tap to change`;
   } else {
-    els.leaveTodayBtn.style.display = '';
+    // Working day, no punches, before lock — show Leave button if before 1pm
+    els.leaveTodayBtn.style.display = isAfter1pm ? 'none' : '';
     els.markTodayBtn.style.display = '';
     els.markTodayBtn.textContent = 'More options (Festival / Holiday / Working) →';
   }
@@ -492,40 +477,58 @@ function renderToday() {
 function describeEntry(entry) {
   const remarkSuffix = entry.remark ? ` · 📝 ${entry.remark}` : '';
   if (isNonWorking(entry.dayType)) {
-    return { detail: DAY_TYPE_LABEL[entry.dayType] + remarkSuffix, right: '—', cssClass: DAY_TYPE_CSS_CLASS[entry.dayType] || 'holiday' };
-  }
-  if (entry.enterTimeDisplay && entry.exitTimeDisplay) {
-    const mins = workedMinutes(entry);
     return {
-      detail: `${entry.enterTimeDisplay} → ${entry.exitTimeDisplay}` + remarkSuffix,
-      right: mins != null ? formatDuration(mins) : '--',
-      cssClass: ''
+      detail: DAY_TYPE_LABEL[entry.dayType] + remarkSuffix,
+      right: '—',
+      cssClass: DAY_TYPE_CSS_CLASS[entry.dayType] || 'holiday',
+      totalMins: null,
     };
   }
-  if (entry.enterTimeDisplay) {
-    return { detail: `Entered ${entry.enterTimeDisplay}` + remarkSuffix, right: 'In progress', cssClass: '' };
+  const sessions = entry.sessions || [];
+  const totalMins = totalWorkedMinutes(entry);
+  const open = openSession(entry);
+
+  if (sessions.length === 0) {
+    return { detail: 'No punches' + remarkSuffix, right: '--', cssClass: '', totalMins: null };
   }
-  return { detail: 'No punches' + remarkSuffix, right: '--', cssClass: '' };
+
+  // Build detail line: summarise all sessions
+  let detail;
+  if (sessions.length === 1) {
+    const s = sessions[0];
+    detail = s.exitDisplay
+      ? `${s.enterDisplay} → ${s.exitDisplay}`
+      : `Entered ${s.enterDisplay}`;
+  } else {
+    const first = sessions[0].enterDisplay;
+    const last = sessions[sessions.length - 1];
+    const end = last.exitDisplay || '…';
+    detail = `${first} → ${end} (${sessions.length} sessions)`;
+  }
+
+  const rightLabel = open
+    ? 'In progress'
+    : totalMins != null ? formatDuration(totalMins) : '--';
+
+  return { detail: detail + remarkSuffix, right: rightLabel, cssClass: '', totalMins };
 }
 
 function renderRecentList() {
   const entries = getRecentEntries(20);
   els.recentList.innerHTML = '';
-
   if (entries.length === 0) {
     els.recentList.innerHTML = '<div class="empty-state">No logs yet. Tap ENTER when you reach office.</div>';
     return;
   }
-
   for (const entry of entries) {
     const div = document.createElement('div');
     const { detail, right, cssClass } = describeEntry(entry);
     div.className = 'log-item' + (cssClass ? ' ' + cssClass : '');
     const d = new Date(entry.dateMillis);
-
+    const locked = isDayLocked(entry);
     div.innerHTML = `
       <div class="left">
-        <div class="d">${displayDate(d)} (${entry.dayOfWeek})</div>
+        <div class="d">${displayDate(d)} (${entry.dayOfWeek})${locked ? ' 🔒' : ''}</div>
         <div class="t">${detail}</div>
       </div>
       <div class="right">${right}</div>
@@ -540,15 +543,13 @@ function renderSummary() {
   const monthIndex = summaryAnchor.getMonth();
   els.monthLabel.textContent = monthLabel(summaryAnchor);
 
+  // getMonthEntries returns day 1→31 ascending (rule #5)
   const entries = getMonthEntries(year, monthIndex);
 
-  const workDays = entries.filter(e => !isNonWorking(e.dayType) && e.enterTimeMillis).length;
+  const workDays = entries.filter(e => !isNonWorking(e.dayType) && hasAnyPunch(e)).length;
   const leaveDays = entries.filter(e => e.dayType === DAY_TYPE.LEAVE).length;
   const holidays = entries.filter(e => isHolidayType(e.dayType)).length;
-  const totalMins = entries.reduce((sum, e) => {
-    const m = workedMinutes(e);
-    return sum + (m || 0);
-  }, 0);
+  const totalMins = entries.reduce((sum, e) => sum + (totalWorkedMinutes(e) || 0), 0);
 
   els.statWorkDays.textContent = workDays;
   els.statLeave.textContent = leaveDays;
@@ -558,28 +559,30 @@ function renderSummary() {
   els.monthList.innerHTML = '';
   for (const entry of entries) {
     const div = document.createElement('div');
-    const { detail, right, cssClass } = describeEntry(entry);
-    div.className = 'log-item' + (cssClass ? ' ' + cssClass : '');
+    const { detail, right, cssClass, totalMins: dayMins } = describeEntry(entry);
     const d = new Date(entry.dateMillis);
+    const locked = isDayLocked(entry);
 
+    // Rule #6: hours color — green if ≥ 8h (480 mins), red if < 8h (working days only)
+    let hoursColorClass = '';
+    if (!isNonWorking(entry.dayType) && dayMins != null) {
+      hoursColorClass = dayMins >= 480 ? 'hours-green' : 'hours-red';
+    }
+
+    div.className = 'log-item' + (cssClass ? ' ' + cssClass : '');
     div.innerHTML = `
       <div class="left">
-        <div class="d">${displayDate(d)} (${entry.dayOfWeek})</div>
+        <div class="d">${displayDate(d)} (${entry.dayOfWeek})${locked ? ' 🔒' : ''}</div>
         <div class="t">${detail}</div>
       </div>
-      <div class="right">${right}</div>
+      <div class="right ${hoursColorClass}">${right}</div>
     `;
     div.addEventListener('click', () => openDayStatusSheet(d));
     els.monthList.appendChild(div);
   }
 }
 
-/* ===================== Monthly summary PDF export =====================
-   No external library used — generates a clean, self-contained HTML
-   document and opens it in a new tab, then triggers the browser's native
-   Print dialog. Choosing "Save as PDF" there produces the file. This keeps
-   the app dependency-free and fully working offline (a CDN-hosted PDF
-   library would silently break export with no internet). */
+/* ===================== PDF export ===================== */
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -589,23 +592,32 @@ function escapeHtml(str) {
 function downloadMonthlySummaryPdf() {
   const year = summaryAnchor.getFullYear();
   const monthIndex = summaryAnchor.getMonth();
-  const entries = getMonthEntries(year, monthIndex).slice().sort((a, b) => a.dateMillis - b.dateMillis);
+  // PDF always day 1→31 ascending
+  const entries = getMonthEntries(year, monthIndex);
 
-  const workDays = entries.filter(e => !isNonWorking(e.dayType) && e.enterTimeMillis).length;
+  const workDays = entries.filter(e => !isNonWorking(e.dayType) && hasAnyPunch(e)).length;
   const leaveDays = entries.filter(e => e.dayType === DAY_TYPE.LEAVE).length;
   const holidays = entries.filter(e => isHolidayType(e.dayType)).length;
-  const totalMins = entries.reduce((sum, e) => sum + (workedMinutes(e) || 0), 0);
+  const totalMins = entries.reduce((sum, e) => sum + (totalWorkedMinutes(e) || 0), 0);
 
   const rows = entries.map(entry => {
     const d = new Date(entry.dateMillis);
-    const { detail, right } = describeEntry(entry);
+    const { detail, right, totalMins: dayMins } = describeEntry(entry);
     const remark = entry.remark ? escapeHtml(entry.remark) : '';
-    return `<tr>
+    // Rule #3: holiday/weekend rows in red in PDF
+    const isRedRow = isHolidayType(entry.dayType);
+    const rowStyle = isRedRow ? ' style="color:#C0392B;"' : '';
+    // Rule #6: hours column color in PDF
+    let hoursStyle = '';
+    if (!isNonWorking(entry.dayType) && dayMins != null) {
+      hoursStyle = dayMins >= 480 ? ' style="color:#1E8E3E;font-weight:bold;"' : ' style="color:#C0392B;font-weight:bold;"';
+    }
+    return `<tr${rowStyle}>
       <td>${displayDate(d)}</td>
       <td>${entry.dayOfWeek}</td>
       <td>${escapeHtml(DAY_TYPE_LABEL[entry.dayType])}</td>
       <td>${escapeHtml(detail)}</td>
-      <td>${escapeHtml(right)}</td>
+      <td${hoursStyle}>${escapeHtml(right)}</td>
       <td>${remark}</td>
     </tr>`;
   }).join('');
@@ -620,7 +632,7 @@ function downloadMonthlySummaryPdf() {
   table{width:100%;border-collapse:collapse;font-size:11px;}
   th,td{border:1px solid #D8D2BC;padding:6px 8px;text-align:left;}
   th{background:#EDE7D6;}
-  .stats{display:flex;gap:24px;margin-bottom:20px;}
+  .stats{display:flex;gap:24px;margin-bottom:20px;flex-wrap:wrap;}
   .stat{border:1px solid #D8D2BC;border-radius:6px;padding:10px 16px;}
   .stat .v{font-size:18px;font-weight:bold;}
   .stat .l{font-size:10px;color:#5A5747;text-transform:uppercase;}
@@ -636,17 +648,14 @@ function downloadMonthlySummaryPdf() {
     <div class="stat"><div class="v">${formatDuration(totalMins)}</div><div class="l">Total Hours</div></div>
   </div>
   <table>
-    <thead><tr><th>Date</th><th>Day</th><th>Type</th><th>Detail</th><th>Hours</th><th>Remark</th></tr></thead>
+    <thead><tr><th>Date</th><th>Day</th><th>Type</th><th>Sessions</th><th>Hours</th><th>Remark</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
   <script>window.onload = () => window.print();<\/script>
 </body></html>`;
 
   const win = window.open('', '_blank');
-  if (!win) {
-    alert('Please allow pop-ups for this site to download the PDF.');
-    return;
-  }
+  if (!win) { alert('Please allow pop-ups for this site to download the PDF.'); return; }
   win.document.open();
   win.document.write(html);
   win.document.close();
@@ -671,10 +680,8 @@ async function handlePunch(isEnter) {
   }
 
   const networkDate = result.date;
-
-  // Re-check against the freshly-fetched network date (not just the device
-  // clock) in case the day type depends on which calendar day it actually is.
   const freshEntry = getOrBuildEntry(networkDate);
+
   if (isNonWorking(freshEntry.dayType)) {
     els.statusMsg.textContent = `Today is marked as ${DAY_TYPE_LABEL[freshEntry.dayType]}. No punch needed.`;
     renderToday();
@@ -697,35 +704,34 @@ async function handlePunch(isEnter) {
   }
 }
 
-/* ===================== Day status picker (bottom sheet) =====================
-   Shared by "Mark today" on Home and tap-any-day in Monthly Summary.
-   Weekends and national holidays are shown as info (can't be removed,
-   since they're calendar facts) but Working/Leave/Festival are switchable. */
+/* ===================== Day status sheet ===================== */
 let sheetTargetDate = null;
 
 function openDayStatusSheet(date) {
   sheetTargetDate = date;
   const entry = getOrBuildEntry(date);
+  const locked = isDayLocked(entry);
   const isAutoLocked = entry.dayType === DAY_TYPE.WEEKEND || entry.dayType === DAY_TYPE.NATIONAL;
 
-  els.sheetTitle.textContent = displayDateFull(date);
+  els.sheetTitle.textContent = displayDateFull(date) + (locked ? ' 🔒' : '');
   els.sheetRemark.value = entry.remark || '';
+  els.sheetRemark.disabled = locked;
+  els.sheetSaveRemark.disabled = locked;
 
-  // Warn if punches exist and would be cleared by switching to non-working.
-  const hasPunches = !!entry.enterTimeMillis;
-
+  const hasPunches = hasAnyPunch(entry);
   els.sheetOptions.innerHTML = '';
 
-  if (isAutoLocked) {
-    // Weekend / National holiday dates are calendar facts — show as locked info,
-    // but still allow switching to Leave/Festival isn't meaningful here, so just inform.
+  if (locked || isAutoLocked) {
+    // View-only — show current status as non-interactive info
     const info = document.createElement('div');
     info.className = 'sheet-option selected';
     info.style.cursor = 'default';
-    const label = entry.dayType === DAY_TYPE.WEEKEND
-      ? 'Weekend (automatic)'
-      : `National Holiday — ${getNationalHolidayName(date) || ''}`;
-    info.innerHTML = `<span class="dot ${DAY_TYPE_CSS_CLASS[entry.dayType] || 'weekend'}"></span> ${label}`;
+    let label;
+    if (entry.dayType === DAY_TYPE.WEEKEND) label = 'Weekend (automatic)';
+    else if (entry.dayType === DAY_TYPE.NATIONAL) label = `National Holiday — ${getNationalHolidayName(date) || ''}`;
+    else label = DAY_TYPE_LABEL[entry.dayType];
+    if (locked) label += ' (locked)';
+    info.innerHTML = `<span class="dot ${DAY_TYPE_CSS_CLASS[entry.dayType] || 'working'}"></span> ${label}`;
     els.sheetOptions.appendChild(info);
   } else {
     const options = [
@@ -741,6 +747,23 @@ function openDayStatusSheet(date) {
       els.sheetOptions.appendChild(btn);
     }
   }
+
+  // Show session list if there are multiple sessions
+  const sessions = entry.sessions || [];
+  let sessionHtml = '';
+  if (sessions.length > 0) {
+    sessionHtml = `<div class="sheet-sessions">
+      <div class="sheet-remark-label">Sessions today</div>
+      ${sessions.map((s, i) => `
+        <div class="session-row">
+          <span>Session ${i + 1}: ${s.enterDisplay}</span>
+          <span>${s.exitDisplay ? '→ ' + s.exitDisplay : '(open)'}</span>
+          ${(s.exitMillis && s.enterMillis) ? `<span class="session-dur">${formatDuration((s.exitMillis - s.enterMillis) / 60000)}</span>` : ''}
+        </div>`).join('')}
+    </div>`;
+  }
+  // Insert session list before remark block
+  els.sheetOptions.insertAdjacentHTML('afterend', sessionHtml);
 
   els.sheetBackdrop.classList.add('show');
 }
@@ -759,6 +782,9 @@ function applyDayStatus(dayType, hadPunches) {
 }
 
 function closeDayStatusSheet() {
+  // Clean up any session list we injected before
+  const existing = document.querySelector('.sheet-sessions');
+  if (existing) existing.remove();
   els.sheetBackdrop.classList.remove('show');
   sheetTargetDate = null;
 }
@@ -780,9 +806,13 @@ els.markTodayBtn.addEventListener('click', () => openDayStatusSheet(new Date()))
 
 els.leaveTodayBtn.addEventListener('click', () => {
   const today = new Date();
+  if (today.getHours() >= 13) {
+    alert('Leave can only be marked before 1:00 PM.');
+    return;
+  }
   const entry = getOrBuildEntry(today);
-  if (entry.enterTimeMillis) {
-    const ok = confirm('This will clear the Enter/Exit times already logged for today. Continue?');
+  if (hasAnyPunch(entry)) {
+    const ok = confirm('This will clear the punch times already logged for today. Continue?');
     if (!ok) return;
   }
   setDayType(today, DAY_TYPE.LEAVE);
@@ -803,7 +833,6 @@ function showView(name) {
 els.tabHome.addEventListener('click', () => showView('home'));
 els.tabSummary.addEventListener('click', () => showView('summary'));
 els.goSummaryLink.addEventListener('click', () => showView('summary'));
-
 els.btnEnter.addEventListener('click', () => handlePunch(true));
 els.btnExit.addEventListener('click', () => handlePunch(false));
 
@@ -820,23 +849,15 @@ els.nextMonth.addEventListener('click', () => {
 renderToday();
 renderRecentList();
 
-// Refresh the today-card at next local midnight so the date rolls over
-// even if the user leaves the app open overnight.
+// Refresh at next local midnight so the date card rolls over if left open overnight
 function scheduleMidnightRefresh() {
   const now = new Date();
   const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
   const ms = nextMidnight.getTime() - now.getTime();
-  setTimeout(() => {
-    renderToday();
-    renderRecentList();
-    scheduleMidnightRefresh();
-  }, ms);
+  setTimeout(() => { renderToday(); renderRecentList(); scheduleMidnightRefresh(); }, ms);
 }
 scheduleMidnightRefresh();
 
-// Register service worker for offline support / installability
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  });
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
 }
