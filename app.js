@@ -625,65 +625,185 @@ function escapeHtml(str) {
 function downloadMonthlySummaryPdf() {
   const year = summaryAnchor.getFullYear();
   const monthIndex = summaryAnchor.getMonth();
-  // PDF always day 1→31 ascending
-  const entries = getMonthEntries(year, monthIndex);
+  const entries = getMonthEntries(year, monthIndex); // day 1→31 ascending
+  const today = new Date();
+  const isCurrentMonth = (year === today.getFullYear() && monthIndex === today.getMonth());
 
-  const workDays = entries.filter(e => !isNonWorking(e.dayType) && hasAnyPunch(e)).length;
-  const leaveDays = entries.filter(e => e.dayType === DAY_TYPE.LEAVE).length;
-  const holidays = entries.filter(e => isHolidayType(e.dayType)).length;
-  const totalMins = entries.reduce((sum, e) => sum + (totalWorkedMinutes(e) || 0), 0);
+  /* ── Core counts ── */
+  const workedEntries   = entries.filter(e => !isNonWorking(e.dayType) && hasAnyPunch(e));
+  const leaveDays       = entries.filter(e => e.dayType === DAY_TYPE.LEAVE).length;
+  const holidays        = entries.filter(e => isHolidayType(e.dayType)).length;
+  const totalWorkedMins = entries.reduce((s, e) => s + (totalWorkedMinutes(e) || 0), 0);
 
+  /* ── 8-hour analysis (working days with punches only) ── */
+  const TARGET_MINS = 480; // 8 hours
+  const fullDays    = workedEntries.filter(e => (totalWorkedMinutes(e) || 0) >= TARGET_MINS).length;
+  const shortDays   = workedEntries.filter(e => (totalWorkedMinutes(e) || 0) < TARGET_MINS).length;
+
+  // Total surplus / deficit across all punched working days
+  const totalDeltaMins = workedEntries.reduce((s, e) => {
+    const mins = totalWorkedMinutes(e) || 0;
+    return s + (mins - TARGET_MINS);
+  }, 0);
+  const isDeficit = totalDeltaMins < 0;
+  const absDeltaMins = Math.abs(totalDeltaMins);
+
+  // Required hours = all scheduled working days in the month (excl weekends/holidays/leave)
+  const scheduledWorkingDays = entries.filter(e => !isNonWorking(e.dayType)).length;
+  const requiredMins = scheduledWorkingDays * TARGET_MINS;
+  const overallDeltaMins = totalWorkedMins - requiredMins;
+  const isOverallDeficit = overallDeltaMins < 0;
+
+  /* ── Projection (current month only, if not yet ended) ── */
+  let projectionHtml = '';
+  if (isCurrentMonth) {
+    const daysPassed = workedEntries.length; // days with at least one punch
+    // Remaining scheduled working days (today onward, excl weekends/holidays/leave)
+    const remainingWorkDays = entries.filter(e => {
+      const d = new Date(e.dateMillis);
+      return !isNonWorking(e.dayType) && d > today;
+    }).length;
+    const avgMinsPerDay = daysPassed > 0 ? totalWorkedMins / daysPassed : 0;
+    const projectedTotal = totalWorkedMins + (avgMinsPerDay * remainingWorkDays);
+    const projectedDelta = projectedTotal - requiredMins;
+    const projIsDeficit = projectedDelta < 0;
+
+    projectionHtml = `
+      <div class="section-title">📈 Projection (month not yet complete)</div>
+      <table class="analysis-table">
+        <tr><td>Days punched so far</td><td>${daysPassed}</td></tr>
+        <tr><td>Remaining working days</td><td>${remainingWorkDays}</td></tr>
+        <tr><td>Avg hours/day so far</td><td>${formatDuration(avgMinsPerDay)}</td></tr>
+        <tr><td>Projected total hours (at current pace)</td><td><b>${formatDuration(projectedTotal)}</b></td></tr>
+        <tr><td>Required total hours</td><td>${formatDuration(requiredMins)}</td></tr>
+        <tr style="color:${projIsDeficit ? '#C0392B' : '#1E8E3E'}">
+          <td><b>${projIsDeficit ? '⚠ Projected shortfall' : '✓ Projected surplus'}</b></td>
+          <td><b>${projIsDeficit ? '-' : '+'}${formatDuration(Math.abs(projectedDelta))}</b></td>
+        </tr>
+      </table>`;
+  }
+
+  /* ── Day-by-day rows ── */
   const rows = entries.map(entry => {
     const d = new Date(entry.dateMillis);
     const { detail, right, totalMins: dayMins } = describeEntry(entry);
     const remark = entry.remark ? escapeHtml(entry.remark) : '';
-    // Rule #3: holiday/weekend rows in red in PDF
-    const isRedRow = isHolidayType(entry.dayType);
+    const isRedRow = isHolidayType(entry.dayType) || entry.dayType === DAY_TYPE.WEEKEND;
     const rowStyle = isRedRow ? ' style="color:#C0392B;"' : '';
-    // Rule #6: hours column color in PDF
+
+    // Per-day delta (only for punched working days)
+    let lagCell = '<td>—</td>';
     let hoursStyle = '';
     if (!isNonWorking(entry.dayType) && dayMins != null) {
-      hoursStyle = dayMins >= 480 ? ' style="color:#1E8E3E;font-weight:bold;"' : ' style="color:#C0392B;font-weight:bold;"';
+      hoursStyle = dayMins >= TARGET_MINS
+        ? ' style="color:#1E8E3E;font-weight:bold;"'
+        : ' style="color:#C0392B;font-weight:bold;"';
+      const delta = dayMins - TARGET_MINS;
+      const sign = delta >= 0 ? '+' : '−';
+      const color = delta >= 0 ? '#1E8E3E' : '#C0392B';
+      lagCell = `<td style="color:${color};font-weight:bold;">${sign}${formatDuration(Math.abs(delta))}</td>`;
+    } else if (isNonWorking(entry.dayType)) {
+      lagCell = '<td>—</td>';
+    } else {
+      // Working day, no punches (absent or future)
+      lagCell = '<td style="color:#999;">No punch</td>';
     }
+
     return `<tr${rowStyle}>
       <td>${displayDate(d)}</td>
       <td>${entry.dayOfWeek}</td>
       <td>${escapeHtml(DAY_TYPE_LABEL[entry.dayType])}</td>
       <td>${escapeHtml(detail)}</td>
       <td${hoursStyle}>${escapeHtml(right)}</td>
+      ${lagCell}
       <td>${remark}</td>
     </tr>`;
   }).join('');
 
+  /* ── Full HTML document ── */
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <title>Office Time Logger — ${escapeHtml(monthLabel(summaryAnchor))}</title>
 <style>
-  body{font-family:Arial,Helvetica,sans-serif;color:#1A1A1A;margin:32px;}
-  h1{font-size:18px;margin-bottom:2px;}
-  h2{font-size:13px;font-weight:normal;color:#5A5747;margin-top:0;margin-bottom:20px;}
-  table{width:100%;border-collapse:collapse;font-size:11px;}
-  th,td{border:1px solid #D8D2BC;padding:6px 8px;text-align:left;}
-  th{background:#EDE7D6;}
-  .stats{display:flex;gap:24px;margin-bottom:20px;flex-wrap:wrap;}
-  .stat{border:1px solid #D8D2BC;border-radius:6px;padding:10px 16px;}
-  .stat .v{font-size:18px;font-weight:bold;}
-  .stat .l{font-size:10px;color:#5A5747;text-transform:uppercase;}
-  @media print{ @page{margin:16mm;} }
+  *{box-sizing:border-box;}
+  body{font-family:Arial,Helvetica,sans-serif;color:#1A1A1A;margin:28px;font-size:12px;}
+  h1{font-size:20px;margin:0 0 2px;}
+  h2{font-size:13px;font-weight:normal;color:#5A5747;margin:0 0 18px;}
+  .stats{display:flex;gap:16px;margin-bottom:18px;flex-wrap:wrap;}
+  .stat{border:1px solid #D8D2BC;border-radius:6px;padding:10px 14px;min-width:100px;}
+  .stat .v{font-size:20px;font-weight:bold;}
+  .stat .l{font-size:9px;color:#5A5747;text-transform:uppercase;letter-spacing:.04em;}
+  .section-title{
+    font-size:12px;font-weight:bold;
+    background:#EDE7D6;padding:6px 10px;
+    border-left:3px solid #8B6914;
+    margin:18px 0 8px;
+  }
+  .analysis-table{width:100%;border-collapse:collapse;margin-bottom:6px;}
+  .analysis-table td{padding:5px 8px;border-bottom:1px solid #EDE7D6;font-size:11px;}
+  .analysis-table td:last-child{text-align:right;font-weight:600;}
+  .kpi-grid{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
+  .kpi{border:1px solid #D8D2BC;border-radius:6px;padding:8px 14px;flex:1;min-width:130px;}
+  .kpi .v{font-size:18px;font-weight:bold;}
+  .kpi .l{font-size:9px;color:#5A5747;text-transform:uppercase;}
+  table.day-table{width:100%;border-collapse:collapse;font-size:10.5px;margin-top:4px;}
+  table.day-table th,table.day-table td{border:1px solid #D8D2BC;padding:5px 7px;text-align:left;}
+  table.day-table th{background:#EDE7D6;font-size:10px;}
+  @media print{@page{margin:14mm;} .no-break{page-break-inside:avoid;}}
 </style></head>
 <body>
   <h1>Office Time Logger</h1>
-  <h2>Monthly Summary — ${escapeHtml(monthLabel(summaryAnchor))}</h2>
+  <h2>Monthly Report — ${escapeHtml(monthLabel(summaryAnchor))}</h2>
+
+  <!-- Summary stats -->
   <div class="stats">
-    <div class="stat"><div class="v">${workDays}</div><div class="l">Working Days</div></div>
+    <div class="stat"><div class="v">${scheduledWorkingDays}</div><div class="l">Scheduled Working Days</div></div>
+    <div class="stat"><div class="v">${workedEntries.length}</div><div class="l">Days Punched In</div></div>
     <div class="stat"><div class="v">${leaveDays}</div><div class="l">Leave</div></div>
     <div class="stat"><div class="v">${holidays}</div><div class="l">Holidays</div></div>
-    <div class="stat"><div class="v">${formatDuration(totalMins)}</div><div class="l">Total Hours</div></div>
+    <div class="stat"><div class="v">${formatDuration(totalWorkedMins)}</div><div class="l">Total Hours Worked</div></div>
+    <div class="stat"><div class="v">${formatDuration(requiredMins)}</div><div class="l">Required Hours (8h×days)</div></div>
   </div>
-  <table>
-    <thead><tr><th>Date</th><th>Day</th><th>Type</th><th>Sessions</th><th>Hours</th><th>Remark</th></tr></thead>
+
+  <!-- 8-hour analysis -->
+  <div class="section-title">⏱ 8-Hour Compliance Analysis</div>
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="v" style="color:#1E8E3E;">${fullDays}</div>
+      <div class="l">Days ≥ 8 hours ✓</div>
+    </div>
+    <div class="kpi">
+      <div class="v" style="color:#C0392B;">${shortDays}</div>
+      <div class="l">Days &lt; 8 hours ✗</div>
+    </div>
+    <div class="kpi">
+      <div class="v" style="color:${isDeficit ? '#C0392B' : '#1E8E3E'};">
+        ${isDeficit ? '−' : '+'}${formatDuration(absDeltaMins)}
+      </div>
+      <div class="l">${isDeficit ? 'Total shortfall (punched days)' : 'Total surplus (punched days)'}</div>
+    </div>
+    <div class="kpi">
+      <div class="v" style="color:${isOverallDeficit ? '#C0392B' : '#1E8E3E'};">
+        ${isOverallDeficit ? '−' : '+'}${formatDuration(Math.abs(overallDeltaMins))}
+      </div>
+      <div class="l">${isOverallDeficit ? 'Overall deficit (all working days)' : 'Overall surplus (all working days)'}</div>
+    </div>
+  </div>
+
+  ${projectionHtml}
+
+  <!-- Day-by-day table -->
+  <div class="section-title">📋 Day-by-Day Breakdown</div>
+  <table class="day-table">
+    <thead>
+      <tr>
+        <th>Date</th><th>Day</th><th>Type</th><th>Sessions</th>
+        <th>Hours</th><th>±8h</th><th>Remark</th>
+      </tr>
+    </thead>
     <tbody>${rows}</tbody>
   </table>
+
   <script>window.onload = () => window.print();<\/script>
 </body></html>`;
 
