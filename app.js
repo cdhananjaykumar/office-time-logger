@@ -177,7 +177,7 @@ async function fetchFromHeader() {
  */
 function getEntry(key) {
   const raw = loadAllEntries()[key] || null;
-  return raw ? migrateEntry(raw) : null;
+  return raw ? autoCloseIfNeeded(migrateEntry(raw)) : null;
 }
 
 function migrateEntry(entry) {
@@ -238,6 +238,39 @@ function totalWorkedMinutes(entry) {
     }
   }
   return total > 0 ? total : null;
+}
+
+/** The auto-logout time: 21:00 (9:00 PM). Any open session still running at
+ *  this time — on the same day or a past day — is automatically closed here.
+ *  This is called every time an entry is read for display or logic, so it
+ *  self-heals even if the app was closed when 9 PM passed. */
+function autoCloseIfNeeded(entry) {
+  const sessions = entry.sessions || [];
+  let modified = false;
+
+  for (const s of sessions) {
+    if (s.enterMillis && !s.exitMillis) {
+      const entryDate = new Date(entry.dateMillis);
+      // Auto-close time: 9:00 PM on the day of the entry
+      const autoCloseTime = new Date(
+        entryDate.getFullYear(),
+        entryDate.getMonth(),
+        entryDate.getDate(),
+        21, 0, 0, 0
+      );
+
+      const now = new Date();
+      // Close if: it's past 9 PM on the entry day, OR the date has changed
+      if (now >= autoCloseTime || isPastDate(entryDate)) {
+        s.exitMillis = autoCloseTime.getTime();
+        s.exitDisplay = '9:00 PM (auto)';
+        modified = true;
+      }
+    }
+  }
+
+  if (modified) saveEntry(entry);
+  return entry;
 }
 
 /** True if there is an open session (entered but not exited). */
@@ -323,7 +356,7 @@ function punchExit(networkDate) {
 
 function getRecentEntries(limit = 20) {
   const all = loadAllEntries();
-  return Object.values(all).map(migrateEntry)
+  return Object.values(all).map(e => autoCloseIfNeeded(migrateEntry(e)))
     .sort((a, b) => b.dateMillis - a.dateMillis)
     .slice(0, limit);
 }
@@ -337,7 +370,7 @@ function getMonthEntries(year, monthIndex) {
     const key = dateKey(d);
     const existing = all[key];
     if (existing) {
-      result.push(migrateEntry(existing));
+      result.push(autoCloseIfNeeded(migrateEntry(existing)));
     } else {
       const dayType = defaultDayType(d);
       result.push({
@@ -857,6 +890,22 @@ function scheduleMidnightRefresh() {
   setTimeout(() => { renderToday(); renderRecentList(); scheduleMidnightRefresh(); }, ms);
 }
 scheduleMidnightRefresh();
+
+// At 9:00 PM, auto-close any open session and refresh the UI
+function schedule9pmAutoClose() {
+  const now = new Date();
+  const ninepm = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 21, 0, 5);
+  // If 9 PM already passed today, schedule for tomorrow's 9 PM
+  if (now >= ninepm) ninepm.setDate(ninepm.getDate() + 1);
+  const ms = ninepm.getTime() - now.getTime();
+  setTimeout(() => {
+    renderToday();
+    renderRecentList();
+    if (els.viewSummary.classList.contains('active')) renderSummary();
+    schedule9pmAutoClose();
+  }, ms);
+}
+schedule9pmAutoClose();
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
