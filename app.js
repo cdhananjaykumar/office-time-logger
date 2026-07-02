@@ -637,22 +637,18 @@ function downloadMonthlySummaryPdf() {
 
   /* ── 8-hour analysis (working days with punches only) ── */
   const TARGET_MINS = 480; // 8 hours
-  const fullDays    = workedEntries.filter(e => (totalWorkedMinutes(e) || 0) >= TARGET_MINS).length;
-  const shortDays   = workedEntries.filter(e => (totalWorkedMinutes(e) || 0) < TARGET_MINS).length;
+  const fullDays  = workedEntries.filter(e => (totalWorkedMinutes(e) || 0) >= TARGET_MINS).length;
+  const shortDays = workedEntries.filter(e => (totalWorkedMinutes(e) || 0) < TARGET_MINS).length;
 
-  // Total surplus / deficit across all punched working days
-  const totalDeltaMins = workedEntries.reduce((s, e) => {
+  // Total hours lacking = sum of shortfall only on days that didn't hit 8h
+  const totalLackingMins = workedEntries.reduce((s, e) => {
     const mins = totalWorkedMinutes(e) || 0;
-    return s + (mins - TARGET_MINS);
+    return mins < TARGET_MINS ? s + (TARGET_MINS - mins) : s;
   }, 0);
-  const isDeficit = totalDeltaMins < 0;
-  const absDeltaMins = Math.abs(totalDeltaMins);
 
-  // Required hours = all scheduled working days in the month (excl weekends/holidays/leave)
+  // Scheduled working days = all non-weekend/holiday/leave days in the month
   const scheduledWorkingDays = entries.filter(e => !isNonWorking(e.dayType)).length;
   const requiredMins = scheduledWorkingDays * TARGET_MINS;
-  const overallDeltaMins = totalWorkedMins - requiredMins;
-  const isOverallDeficit = overallDeltaMins < 0;
 
   /* ── Projection (current month only, if not yet ended) ── */
   let projectionHtml = '';
@@ -766,27 +762,21 @@ function downloadMonthlySummaryPdf() {
   </div>
 
   <!-- 8-hour analysis -->
-  <div class="section-title">⏱ 8-Hour Compliance Analysis</div>
+  <div class="section-title">⏱ 8-Hour Compliance</div>
   <div class="kpi-grid">
     <div class="kpi">
-      <div class="v" style="color:#1E8E3E;">${fullDays}</div>
-      <div class="l">Days ≥ 8 hours ✓</div>
+      <div class="v" style="color:#1E8E3E;">${fullDays} days</div>
+      <div class="l">Completed 8 hours ✓</div>
     </div>
     <div class="kpi">
-      <div class="v" style="color:#C0392B;">${shortDays}</div>
-      <div class="l">Days &lt; 8 hours ✗</div>
+      <div class="v" style="color:${shortDays > 0 ? '#C0392B' : '#1E8E3E'};">${shortDays} days</div>
+      <div class="l">Did not complete 8 hours ✗</div>
     </div>
     <div class="kpi">
-      <div class="v" style="color:${isDeficit ? '#C0392B' : '#1E8E3E'};">
-        ${isDeficit ? '−' : '+'}${formatDuration(absDeltaMins)}
+      <div class="v" style="color:${totalLackingMins > 0 ? '#C0392B' : '#1E8E3E'};">
+        ${totalLackingMins > 0 ? '−' + formatDuration(totalLackingMins) : 'None'}
       </div>
-      <div class="l">${isDeficit ? 'Total shortfall (punched days)' : 'Total surplus (punched days)'}</div>
-    </div>
-    <div class="kpi">
-      <div class="v" style="color:${isOverallDeficit ? '#C0392B' : '#1E8E3E'};">
-        ${isOverallDeficit ? '−' : '+'}${formatDuration(Math.abs(overallDeltaMins))}
-      </div>
-      <div class="l">${isOverallDeficit ? 'Overall deficit (all working days)' : 'Overall surplus (all working days)'}</div>
+      <div class="l">Total hours lacking</div>
     </div>
   </div>
 
